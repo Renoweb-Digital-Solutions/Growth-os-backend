@@ -45,7 +45,14 @@ const register = asyncHandler(async (req, res) => {
       res.status(201).json({
         message: 'User registered successfully',
         token,
-        user: { id: user._id, name: user.name, email: user.email, role: user.role }
+        user: { 
+          id: user._id, 
+          name: user.name, 
+          email: user.email, 
+          role: user.role,
+          onboardingStep: user.onboardingStep,
+          onboardingComplete: user.onboardingComplete
+        }
       });
     }
   );
@@ -85,7 +92,15 @@ const login = asyncHandler(async (req, res) => {
       res.json({
         message: 'Login successful',
         token,
-        user: { id: user._id, name: user.name, email: user.email, role: user.role, tenantId: user.tenantId }
+        user: { 
+          id: user._id, 
+          name: user.name, 
+          email: user.email, 
+          role: user.role, 
+          tenantId: user.tenantId,
+          onboardingStep: user.onboardingStep,
+          onboardingComplete: user.onboardingComplete
+        }
       });
     }
   );
