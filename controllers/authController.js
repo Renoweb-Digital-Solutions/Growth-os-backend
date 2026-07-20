@@ -28,11 +28,13 @@ const register = asyncHandler(async (req, res) => {
   await user.save();
   
   // Reason: We need a payload to sign into the JWT token that identifies the user on subsequent requests.
-  // How: The payload contains the user's MongoDB ID and role, signed with the server's secret key.
+  // How: The payload contains the user's MongoDB ID, role, name, and email, signed with the server's secret key.
   const payload = {
     user: {
       id: user._id,
-      role: user.role
+      role: user.role,
+      name: user.name,
+      email: user.email
     }
   };
   
@@ -79,7 +81,9 @@ const login = asyncHandler(async (req, res) => {
   const payload = {
     user: {
       id: user._id,
-      role: user.role
+      role: user.role,
+      name: user.name,
+      email: user.email
     }
   };
   
