@@ -215,16 +215,20 @@ const getOverview = async (userId, timeParams = {}) => {
   }
 
   let instagramOverview = null;
+  let instagramTruncated = false;
   if (capabilities.instagram.available && assets.instagramAccounts.length > 0) {
     const defaultIg = assets.instagramAccounts[0];
     try {
-      const mediaResult = await metaService.getInstagramMedia(
+      const allMediaResult = await fetchWithDateBoundary(
+        metaService.getInstagramMedia,
         defaultIg.instagramAccountId,
         integration.accessToken,
-        { limit: 100 },
-        userId
+        timeParams,
+        userId,
+        'media'
       );
-      const inPeriodMedia = filterPublishedItemsInPeriod(mediaResult.media, timeParams.since, timeParams.until);
+      const inPeriodMedia = filterPublishedItemsInPeriod(allMediaResult.items, timeParams.since, timeParams.until);
+      instagramTruncated = allMediaResult.paginationTruncated;
 
       instagramOverview = {
         instagramAccountId: defaultIg.instagramAccountId,
@@ -253,6 +257,8 @@ const getOverview = async (userId, timeParams = {}) => {
         timezone: assets.adAccounts[0]?.timezone || 'UTC',
       },
       capabilities,
+      complete: !instagramTruncated,
+      paginationTruncated: instagramTruncated,
     },
   };
 };
@@ -314,6 +320,55 @@ const getSocialInsights = async (userId, queryParams = {}) => {
 };
 
 /**
+ * Helper to paginate through Meta API until an item older than the `since` boundary is found
+ */
+const fetchWithDateBoundary = async (fetchFn, id, accessToken, queryParams, userId, dataKey) => {
+  let allItems = [];
+  let currentAfter = queryParams.after || null;
+  let hasNext = true;
+  const limit = queryParams.limit || 25;
+  const startDate = queryParams.since ? new Date(queryParams.since) : null;
+
+  let pageCount = 0;
+  const MAX_PAGES = 50; // Guard against unbounded loops
+  let isTruncated = false;
+
+  while (hasNext && pageCount < MAX_PAGES) {
+    pageCount++;
+    const params = { ...queryParams, limit, after: currentAfter };
+    const result = await fetchFn(id, accessToken, params, userId);
+    
+    const items = result[dataKey] || [];
+    allItems = allItems.concat(items);
+
+    if (items.length === 0) break;
+    
+    const oldestItem = items[items.length - 1];
+    const oldestDate = new Date(oldestItem.createdTime || oldestItem.timestamp);
+    
+    // Stop paginating if oldest item is strictly older than startDate
+    if (startDate && !isNaN(oldestDate.getTime()) && oldestDate < startDate) {
+      break;
+    }
+    
+    if (result.pagination && result.pagination.hasNextPage) {
+      currentAfter = result.pagination.cursors.after;
+    } else {
+      hasNext = false;
+    }
+  }
+
+  if (hasNext && pageCount >= MAX_PAGES) {
+    isTruncated = true;
+  }
+
+  return {
+    items: allItems,
+    paginationTruncated: isTruncated
+  };
+};
+
+/**
  * GET /api/meta/insights/content
  * Normalized post and media performance list
  */
@@ -324,29 +379,45 @@ const getContentInsights = async (userId, queryParams = {}) => {
   const platform = queryParams.platform || 'all';
   let facebookPosts = [];
   let instagramMedia = [];
+  let facebookTruncated = false;
+  let instagramTruncated = false;
 
   if ((platform === 'all' || platform === 'facebook') && capabilities.social.available && assets.pages[0]) {
     try {
-      const postsResult = await metaService.getFacebookPagePosts(
+      const fbResult = await fetchWithDateBoundary(
+        metaService.getFacebookPagePosts,
         assets.pages[0].pageId,
         integration.accessToken,
-        { limit: queryParams.limit, after: queryParams.after },
-        userId
+        queryParams,
+        userId,
+        'posts'
       );
-      facebookPosts = filterPublishedItemsInPeriod(postsResult.posts, queryParams.since, queryParams.until).map((p) => ({
-        platform: 'facebook',
-        contentId: p.postId,
-        message: p.message,
-        createdTime: p.createdTime,
-        permalinkUrl: p.permalinkUrl,
-        fullPicture: p.fullPicture,
-        metrics: {
-          shareCount: p.shareCount,
-          reactionCount: p.reactionCount,
-          commentCount: p.commentCount,
-          fbPostInteractions: p.reactionCount + p.commentCount + p.shareCount,
-        },
-      }));
+      facebookTruncated = fbResult.paginationTruncated;
+      
+      facebookPosts = filterPublishedItemsInPeriod(fbResult.items, queryParams.since, queryParams.until).map((p) => {
+        const getInsight = (name) => {
+          const metric = p.insightsData?.find((i) => i.name === name);
+          return metric && metric.values && metric.values.length > 0 ? metric.values[0].value : null;
+        };
+
+        return {
+          platform: 'facebook',
+          contentId: p.postId,
+          message: p.message,
+          createdTime: p.createdTime,
+          permalinkUrl: p.permalinkUrl,
+          fullPicture: p.fullPicture,
+          metrics: {
+            shareCount: p.shareCount,
+            reactionCount: p.reactionCount,
+            commentCount: p.commentCount,
+            fbPostInteractions: p.reactionCount + p.commentCount + p.shareCount,
+            impressions: getInsight('post_impressions'),
+            reach: getInsight('post_impressions_unique'),
+            engagement: getInsight('post_engaged_users'),
+          },
+        };
+      });
     } catch (err) {
       facebookPosts = [];
     }
@@ -354,26 +425,42 @@ const getContentInsights = async (userId, queryParams = {}) => {
 
   if ((platform === 'all' || platform === 'instagram') && capabilities.instagram.available && assets.instagramAccounts[0]) {
     try {
-      const mediaResult = await metaService.getInstagramMedia(
+      const igResult = await fetchWithDateBoundary(
+        metaService.getInstagramMedia,
         assets.instagramAccounts[0].instagramAccountId,
         integration.accessToken,
-        { limit: queryParams.limit, after: queryParams.after },
-        userId
+        queryParams,
+        userId,
+        'media'
       );
-      instagramMedia = filterPublishedItemsInPeriod(mediaResult.media, queryParams.since, queryParams.until).map((m) => ({
-        platform: 'instagram',
-        contentId: m.mediaId,
-        caption: m.caption,
-        createdTime: m.timestamp,
-        permalinkUrl: m.permalink,
-        mediaUrl: m.mediaUrl,
-        mediaType: m.mediaType,
-        metrics: {
-          likeCount: m.likeCount,
-          commentCount: m.commentCount,
-          igMediaInteractions: m.likeCount + m.commentCount,
-        },
-      }));
+      instagramTruncated = igResult.paginationTruncated;
+
+      instagramMedia = filterPublishedItemsInPeriod(igResult.items, queryParams.since, queryParams.until).map((m) => {
+        const getInsight = (name) => {
+          const metric = m.insightsData?.find((i) => i.name === name);
+          return metric && metric.values && metric.values.length > 0 ? metric.values[0].value : null;
+        };
+
+        return {
+          platform: 'instagram',
+          contentId: m.mediaId,
+          caption: m.caption,
+          createdTime: m.timestamp,
+          permalinkUrl: m.permalink,
+          mediaUrl: m.mediaUrl,
+          mediaType: m.mediaType,
+          metrics: {
+            likeCount: m.likeCount,
+            commentCount: m.commentCount,
+            igMediaInteractions: m.likeCount + m.commentCount,
+            impressions: getInsight('impressions'),
+            reach: getInsight('reach'),
+            engagement: getInsight('engagement'),
+            saved: getInsight('saved'),
+            plays: getInsight('plays'),
+          },
+        };
+      });
     } catch (err) {
       instagramMedia = [];
     }
@@ -394,6 +481,8 @@ const getContentInsights = async (userId, queryParams = {}) => {
         timezone: 'UTC',
       },
       capabilities,
+      complete: !(facebookTruncated || instagramTruncated),
+      paginationTruncated: facebookTruncated || instagramTruncated,
     },
   };
 };
@@ -476,24 +565,44 @@ const getCampaignInsights = async (userId, queryParams = {}) => {
   const divisor = getCurrencyDivisor(adAccInfo.currency);
 
   const campaignResult = await metaService.getCampaigns(targetAdAccId, integration.accessToken, queryParams, userId);
+  
+  let campaignInsights = [];
+  try {
+    const insightsResult = await metaService.getAdsInsights(targetAdAccId, integration.accessToken, { ...queryParams, level: 'campaign', limit: 100 }, userId);
+    campaignInsights = insightsResult.insights || [];
+  } catch (err) {
+    // Graceful degradation: metadata still available
+  }
 
-  const normalizedCampaigns = campaignResult.campaigns.map((c) => ({
-    campaignId: c.campaignId,
-    name: c.name,
-    status: c.status,
-    effectiveStatus: c.effectiveStatus,
-    objective: c.objective,
-    buyingType: c.buyingType,
-    startTime: c.startTime,
-    stopTime: c.stopTime,
-    budget: {
-      currency: adAccInfo.currency,
-      dailyBudgetSubunits: c.dailyBudget ? c.dailyBudget * 100 : null, // Raw integer subunits
-      dailyBudgetFormatted: c.dailyBudget ? Number((c.dailyBudget * 100 / divisor).toFixed(2)) : null,
-      lifetimeBudgetSubunits: c.lifetimeBudget ? c.lifetimeBudget * 100 : null,
-      lifetimeBudgetFormatted: c.lifetimeBudget ? Number((c.lifetimeBudget * 100 / divisor).toFixed(2)) : null,
-    },
-  }));
+  const normalizedCampaigns = campaignResult.campaigns.map((c) => {
+    const insights = campaignInsights.find((i) => i.campaignId === c.campaignId) || {};
+    return {
+      campaignId: c.campaignId,
+      name: c.name,
+      status: c.status,
+      effectiveStatus: c.effectiveStatus,
+      objective: c.objective,
+      buyingType: c.buyingType,
+      startTime: c.startTime,
+      stopTime: c.stopTime,
+      budget: {
+        currency: adAccInfo.currency,
+        dailyBudgetSubunits: c.dailyBudget, // Raw integer subunits
+        dailyBudgetFormatted: c.dailyBudget ? Number((c.dailyBudget / divisor).toFixed(2)) : null,
+        lifetimeBudgetSubunits: c.lifetimeBudget,
+        lifetimeBudgetFormatted: c.lifetimeBudget ? Number((c.lifetimeBudget / divisor).toFixed(2)) : null,
+      },
+      spend: insights.spend !== undefined ? insights.spend : null,
+      impressions: insights.impressions !== undefined ? insights.impressions : null,
+      reach: insights.reach !== undefined ? insights.reach : null,
+      clicks: insights.clicks !== undefined ? insights.clicks : null,
+      ctr: insights.ctr !== undefined ? insights.ctr : null,
+      cpc: insights.cpc !== undefined ? insights.cpc : null,
+      cpm: insights.cpm !== undefined ? insights.cpm : null,
+      actions: insights.actions || [],
+      costPerActionType: insights.costPerActionType || [],
+    };
+  });
 
   return {
     data: {
@@ -501,6 +610,175 @@ const getCampaignInsights = async (userId, queryParams = {}) => {
       currency: adAccInfo.currency,
       campaigns: normalizedCampaigns,
       pagination: campaignResult.pagination,
+    },
+    meta: {
+      source: 'meta',
+      dateRange: {
+        since: queryParams.since || null,
+        until: queryParams.until || null,
+        preset: queryParams.datePreset || null,
+        timezone: adAccInfo.timezone || 'UTC',
+      },
+      capabilities,
+    },
+  };
+};
+
+/**
+ * GET /api/meta/insights/adsets
+ * AdSet-level breakdown with currency-aware budget formatting
+ */
+const getAdSetInsights = async (userId, queryParams = {}) => {
+  const ctx = await getUserContextAndAssets(userId);
+  const { integration, assets, capabilities } = ctx;
+
+  if (!capabilities.ads.available || assets.adAccounts.length === 0) {
+    return {
+      data: null,
+      meta: {
+        source: 'meta',
+        dateRange: {
+          since: queryParams.since || null,
+          until: queryParams.until || null,
+          preset: queryParams.datePreset || null,
+          timezone: 'UTC',
+        },
+        capabilities,
+      },
+    };
+  }
+
+  const targetAdAccId = queryParams.adAccountId || assets.adAccounts[0].adAccountId;
+  const adAccInfo = assets.adAccounts.find((a) => a.adAccountId === targetAdAccId) || assets.adAccounts[0];
+  const divisor = getCurrencyDivisor(adAccInfo.currency);
+
+  const adSetResult = await metaService.getAdSets(targetAdAccId, integration.accessToken, queryParams, userId);
+  
+  let adSetInsights = [];
+  try {
+    const insightsResult = await metaService.getAdsInsights(targetAdAccId, integration.accessToken, { ...queryParams, level: 'adset', limit: 100 }, userId);
+    adSetInsights = insightsResult.insights || [];
+  } catch (err) {
+    // Graceful degradation: metadata still available
+  }
+
+  const normalizedAdSets = adSetResult.adSets.map((adSet) => {
+    const insights = adSetInsights.find((i) => i.adSetId === adSet.adSetId) || {};
+    return {
+      adSetId: adSet.adSetId,
+      campaignId: adSet.campaignId,
+      name: adSet.name,
+      status: adSet.status,
+      effectiveStatus: adSet.effectiveStatus,
+      optimizationGoal: adSet.optimizationGoal,
+      billingEvent: adSet.billingEvent,
+      startTime: adSet.startTime,
+      endTime: adSet.endTime,
+      budget: {
+        currency: adAccInfo.currency,
+        dailyBudgetSubunits: adSet.dailyBudget, // Raw integer subunits
+        dailyBudgetFormatted: adSet.dailyBudget ? Number((adSet.dailyBudget / divisor).toFixed(2)) : null,
+        lifetimeBudgetSubunits: adSet.lifetimeBudget,
+        lifetimeBudgetFormatted: adSet.lifetimeBudget ? Number((adSet.lifetimeBudget / divisor).toFixed(2)) : null,
+      },
+      spend: insights.spend !== undefined ? insights.spend : null,
+      impressions: insights.impressions !== undefined ? insights.impressions : null,
+      reach: insights.reach !== undefined ? insights.reach : null,
+      clicks: insights.clicks !== undefined ? insights.clicks : null,
+      ctr: insights.ctr !== undefined ? insights.ctr : null,
+      cpc: insights.cpc !== undefined ? insights.cpc : null,
+      cpm: insights.cpm !== undefined ? insights.cpm : null,
+      actions: insights.actions || [],
+      costPerActionType: insights.costPerActionType || [],
+    };
+  });
+
+  return {
+    data: {
+      adAccountId: targetAdAccId,
+      currency: adAccInfo.currency,
+      adSets: normalizedAdSets,
+      pagination: adSetResult.pagination,
+    },
+    meta: {
+      source: 'meta',
+      dateRange: {
+        since: queryParams.since || null,
+        until: queryParams.until || null,
+        preset: queryParams.datePreset || null,
+        timezone: adAccInfo.timezone || 'UTC',
+      },
+      capabilities,
+    },
+  };
+};
+
+/**
+ * GET /api/meta/insights/ads-level
+ * Ad-level breakdown
+ */
+const getAdInsights = async (userId, queryParams = {}) => {
+  const ctx = await getUserContextAndAssets(userId);
+  const { integration, assets, capabilities } = ctx;
+
+  if (!capabilities.ads.available || assets.adAccounts.length === 0) {
+    return {
+      data: null,
+      meta: {
+        source: 'meta',
+        dateRange: {
+          since: queryParams.since || null,
+          until: queryParams.until || null,
+          preset: queryParams.datePreset || null,
+          timezone: 'UTC',
+        },
+        capabilities,
+      },
+    };
+  }
+
+  const targetAdAccId = queryParams.adAccountId || assets.adAccounts[0].adAccountId;
+  const adAccInfo = assets.adAccounts.find((a) => a.adAccountId === targetAdAccId) || assets.adAccounts[0];
+
+  const adResult = await metaService.getAds(targetAdAccId, integration.accessToken, queryParams, userId);
+  
+  let adInsightsData = [];
+  try {
+    const insightsResult = await metaService.getAdsInsights(targetAdAccId, integration.accessToken, { ...queryParams, level: 'ad', limit: 100 }, userId);
+    adInsightsData = insightsResult.insights || [];
+  } catch (err) {
+    // Graceful degradation: metadata still available
+  }
+
+  const normalizedAds = adResult.ads.map((ad) => {
+    const insights = adInsightsData.find((i) => i.adId === ad.adId) || {};
+    return {
+      adId: ad.adId,
+      campaignId: ad.campaignId,
+      adSetId: ad.adSetId,
+      name: ad.name,
+      status: ad.status,
+      effectiveStatus: ad.effectiveStatus,
+      createdTime: ad.createdTime,
+      updatedTime: ad.updatedTime,
+      spend: insights.spend !== undefined ? insights.spend : null,
+      impressions: insights.impressions !== undefined ? insights.impressions : null,
+      reach: insights.reach !== undefined ? insights.reach : null,
+      clicks: insights.clicks !== undefined ? insights.clicks : null,
+      ctr: insights.ctr !== undefined ? insights.ctr : null,
+      cpc: insights.cpc !== undefined ? insights.cpc : null,
+      cpm: insights.cpm !== undefined ? insights.cpm : null,
+      actions: insights.actions || [],
+      costPerActionType: insights.costPerActionType || [],
+    };
+  });
+
+  return {
+    data: {
+      adAccountId: targetAdAccId,
+      currency: adAccInfo.currency,
+      ads: normalizedAds,
+      pagination: adResult.pagination,
     },
     meta: {
       source: 'meta',
@@ -524,4 +802,6 @@ module.exports = {
   getContentInsights,
   getAdsInsights,
   getCampaignInsights,
+  getAdSetInsights,
+  getAdInsights,
 };

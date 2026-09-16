@@ -134,10 +134,53 @@ const getCampaignInsights = asyncHandler(async (req, res) => {
   });
 });
 
+// @desc    AdSet-level performance breakdown
+// @route   GET /api/meta/insights/adsets
+// @access  Private (Protected by Gromentum JWT)
+const getAdSetInsights = asyncHandler(async (req, res) => {
+  const { adAccountId, campaignId, limit, after } = req.query;
+
+  const result = await metaInsightService.getAdSetInsights(req.user._id, {
+    adAccountId,
+    campaignId,
+    limit,
+    after,
+  });
+
+  res.json({
+    success: true,
+    data: result.data,
+    meta: result.meta,
+  });
+});
+
+// @desc    Ad-level performance breakdown
+// @route   GET /api/meta/insights/ads-level
+// @access  Private (Protected by Gromentum JWT)
+const getAdInsights = asyncHandler(async (req, res) => {
+  const { adAccountId, adSetId, campaignId, limit, after } = req.query;
+
+  const result = await metaInsightService.getAdInsights(req.user._id, {
+    adAccountId,
+    adSetId,
+    campaignId,
+    limit,
+    after,
+  });
+
+  res.json({
+    success: true,
+    data: result.data,
+    meta: result.meta,
+  });
+});
+
 module.exports = {
   getOverview,
   getSocialInsights,
   getContentInsights,
   getAdsInsights,
   getCampaignInsights,
+  getAdSetInsights,
+  getAdInsights,
 };

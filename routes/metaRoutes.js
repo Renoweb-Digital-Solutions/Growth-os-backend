@@ -105,4 +105,12 @@ router.get('/insights/ads', protect, metaInsightController.getAdsInsights);
 // @desc    Campaign-level performance breakdown with currency subunit conversion
 router.get('/insights/campaigns', protect, metaInsightController.getCampaignInsights);
 
+// @route   GET /api/meta/insights/adsets
+// @desc    AdSet-level performance breakdown with currency subunit conversion
+router.get('/insights/adsets', protect, metaInsightController.getAdSetInsights);
+
+// @route   GET /api/meta/insights/ads-level
+// @desc    Ad-level performance breakdown with currency subunit conversion
+router.get('/insights/ads-level', protect, metaInsightController.getAdInsights);
+
 module.exports = router;

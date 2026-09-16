@@ -357,7 +357,7 @@ const getFacebookPageDetails = async (pageId, accessToken, userId = null) => {
  */
 const getFacebookPagePosts = async (pageId, accessToken, paginationParams = {}, userId = null) => {
   const pageToken = await getPageAccessToken(pageId, accessToken, userId);
-  const fields = 'id,message,created_time,full_picture,permalink_url,shares,reactions.summary(true),comments.summary(true)';
+  const fields = 'id,message,created_time,full_picture,permalink_url,shares,reactions.summary(true),comments.summary(true),insights.metric(post_impressions,post_impressions_unique,post_engaged_users)';
   const result = await fetchPaginatedGraphApi(`/${pageId}/posts`, pageToken, { ...paginationParams, fields }, userId, false);
 
   const normalizedPosts = result.data.map((post) => ({
@@ -369,6 +369,7 @@ const getFacebookPagePosts = async (pageId, accessToken, paginationParams = {}, 
     shareCount: post.shares ? post.shares.count : 0,
     reactionCount: post.reactions?.summary ? post.reactions.summary.total_count : 0,
     commentCount: post.comments?.summary ? post.comments.summary.total_count : 0,
+    insightsData: post.insights?.data || [],
   }));
 
   return {
@@ -383,7 +384,7 @@ const getFacebookPagePosts = async (pageId, accessToken, paginationParams = {}, 
 const getFacebookPageInsights = async (pageId, accessToken, timeParams = {}, userId = null) => {
   const pageToken = await getPageAccessToken(pageId, accessToken, userId);
   const params = {
-    metric: 'page_views_total',
+    metric: 'page_views_total,page_fan_adds,page_engaged_users,page_impressions,page_post_engagements',
     period: 'day',
   };
 
@@ -434,18 +435,38 @@ const getInstagramAccounts = async (accessToken, userId = null) => {
  * Fetches media posts published by an Instagram Professional Account with pagination
  */
 const getInstagramMedia = async (instagramAccountId, accessToken, paginationParams = {}, userId = null) => {
-  const fields = 'id,caption,media_type,media_url,permalink,timestamp,like_count,comments_count';
+  const fields = 'id,caption,media_type,media_product_type,media_url,permalink,timestamp,like_count,comments_count';
   const result = await fetchPaginatedGraphApi(`/${instagramAccountId}/media`, accessToken, { ...paginationParams, fields }, userId);
 
-  const normalizedMedia = result.data.map((item) => ({
-    mediaId: item.id,
-    caption: item.caption || '',
-    mediaType: item.media_type,
-    mediaUrl: item.media_url || null,
-    permalink: item.permalink || null,
-    timestamp: item.timestamp,
-    likeCount: item.like_count || 0,
-    commentCount: item.comments_count || 0,
+  const normalizedMedia = await Promise.all(result.data.map(async (item) => {
+    let insightsData = [];
+    
+    try {
+      let metric = 'impressions,reach,engagement,saved';
+      if (item.media_product_type === 'REELS') {
+        metric = 'plays,reach,saved';
+      } else if (item.media_type === 'CAROUSEL_ALBUM') {
+        metric = 'carousel_album_impressions,carousel_album_reach,carousel_album_engagement,carousel_album_saved';
+      }
+
+      const insResult = await fetchGraphApi(`/${item.id}/insights`, accessToken, { metric }, userId);
+      insightsData = insResult.data || [];
+    } catch (err) {
+      // Gracefully ignore unsupported media type errors or missing metrics
+    }
+
+    return {
+      mediaId: item.id,
+      caption: item.caption || '',
+      mediaType: item.media_type,
+      mediaProductType: item.media_product_type || null,
+      mediaUrl: item.media_url || null,
+      permalink: item.permalink || null,
+      timestamp: item.timestamp,
+      likeCount: item.like_count || 0,
+      commentCount: item.comments_count || 0,
+      insightsData,
+    };
   }));
 
   return {
@@ -524,8 +545,8 @@ const getCampaigns = async (adAccountId, accessToken, paginationParams = {}, use
     buyingType: c.buying_type || null,
     startTime: c.start_time || null,
     stopTime: c.stop_time || null,
-    dailyBudget: c.daily_budget ? Number(c.daily_budget) / 100 : null,
-    lifetimeBudget: c.lifetime_budget ? Number(c.lifetime_budget) / 100 : null,
+    dailyBudget: c.daily_budget ? Number(c.daily_budget) : null,
+    lifetimeBudget: c.lifetime_budget ? Number(c.lifetime_budget) : null,
   }));
 
   return {
@@ -552,8 +573,8 @@ const getAdSets = async (adAccountId, accessToken, paginationParams = {}, userId
     campaignId: adSet.campaign_id,
     status: adSet.status,
     effectiveStatus: adSet.effective_status,
-    dailyBudget: adSet.daily_budget ? Number(adSet.daily_budget) / 100 : null,
-    lifetimeBudget: adSet.lifetime_budget ? Number(adSet.lifetime_budget) / 100 : null,
+    dailyBudget: adSet.daily_budget ? Number(adSet.daily_budget) : null,
+    lifetimeBudget: adSet.lifetime_budget ? Number(adSet.lifetime_budget) : null,
     startTime: adSet.start_time || null,
     endTime: adSet.end_time || null,
     optimizationGoal: adSet.optimization_goal || null,
@@ -605,8 +626,18 @@ const getAds = async (adAccountId, accessToken, paginationParams = {}, userId = 
  * Fetches Ads Insights for an Ad Account with metrics normalization & derived calculation rules
  */
 const getAdsInsights = async (adAccountId, accessToken, queryParams = {}, userId = null) => {
-  const fields = 'account_id,account_name,spend,impressions,reach,clicks,ctr,cpc,cpm,actions,cost_per_action_type,date_start,date_stop';
   const level = ['account', 'campaign', 'adset', 'ad'].includes(queryParams.level) ? queryParams.level : 'account';
+  
+  let fields = 'account_id,account_name,spend,impressions,reach,clicks,ctr,cpc,cpm,actions,cost_per_action_type,date_start,date_stop';
+  if (level === 'campaign' || level === 'adset' || level === 'ad') {
+    fields += ',campaign_id,campaign_name';
+  }
+  if (level === 'adset' || level === 'ad') {
+    fields += ',adset_id,adset_name';
+  }
+  if (level === 'ad') {
+    fields += ',ad_id,ad_name';
+  }
 
   const params = {
     fields,
@@ -635,9 +666,25 @@ const getAdsInsights = async (adAccountId, accessToken, queryParams = {}, userId
     const cpc = row.cpc !== undefined ? Number(row.cpc) : (clicks > 0 ? spend / clicks : 0);
     const cpm = row.cpm !== undefined ? Number(row.cpm) : (impressions > 0 ? (spend / impressions) * 1000 : 0);
 
-    return {
+    const base = {
       accountId: row.account_id,
       accountName: row.account_name || null,
+    };
+    if (['campaign', 'adset', 'ad'].includes(level)) {
+      base.campaignId = row.campaign_id;
+      base.campaignName = row.campaign_name || null;
+    }
+    if (['adset', 'ad'].includes(level)) {
+      base.adSetId = row.adset_id;
+      base.adSetName = row.adset_name || null;
+    }
+    if (level === 'ad') {
+      base.adId = row.ad_id;
+      base.adName = row.ad_name || null;
+    }
+
+    return {
+      ...base,
       spend,
       impressions,
       reach,
