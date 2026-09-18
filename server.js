@@ -44,7 +44,13 @@ app.use('/api', limiter);
 app.use('/api/auth', authRoutes);
 app.use('/api/onboarding', onboardingRoutes);
 app.use('/api/users', userRoutes);
-app.use('/api/meta', metaRoutes);
+
+app.use('/api/meta', (req, res, next) => {
+  const reqId = Math.random().toString(36).substring(2, 9);
+  req.metaReqId = reqId;
+  console.log(`[API] requestId=${reqId} route=${req.method} ${req.originalUrl} timestamp=${new Date().toISOString()}`);
+  next();
+}, metaRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => {

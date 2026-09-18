@@ -90,6 +90,25 @@ const getContentInsights = asyncHandler(async (req, res) => {
   });
 });
 
+// @desc    Get details and insights for a specific published post/media item
+// @route   GET /api/meta/insights/content/:contentId
+// @access  Private (Protected by Gromentum JWT)
+const getSingleContentInsights = asyncHandler(async (req, res) => {
+  const { contentId } = req.params;
+  const { platform, assetId } = req.query;
+
+  const result = await metaInsightService.getSingleContentInsights(req.user._id, contentId, {
+    platform,
+    assetId,
+  });
+
+  res.json({
+    success: true,
+    data: result.data,
+    meta: result.meta,
+  });
+});
+
 // @desc    Advertising Insights across Ad Accounts with derived metrics
 // @route   GET /api/meta/insights/ads
 // @access  Private (Protected by Gromentum JWT)
@@ -179,6 +198,7 @@ module.exports = {
   getOverview,
   getSocialInsights,
   getContentInsights,
+  getSingleContentInsights,
   getAdsInsights,
   getCampaignInsights,
   getAdSetInsights,

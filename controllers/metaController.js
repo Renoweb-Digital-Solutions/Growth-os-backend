@@ -3,6 +3,7 @@ const asyncHandler = require('../utils/asyncHandler');
 const MetaIntegration = require('../models/MetaIntegration');
 const MetaOAuthState = require('../models/MetaOAuthState');
 const metaService = require('../services/metaService');
+const metaInsightService = require('../services/metaInsightService');
 
 // @desc    Initiate Meta OAuth flow (generate secure state & redirect)
 // @route   GET /api/meta/connect
@@ -95,6 +96,8 @@ const callback = asyncHandler(async (req, res) => {
     { upsert: true, new: true, setDefaultsOnInsert: true }
   );
 
+  metaInsightService.invalidateUserCache(stateRecord.userId);
+
   const redirectUrl = process.env.FRONTEND_URL || process.env.META_SUCCESS_REDIRECT_URL;
   if (redirectUrl) {
     return res.redirect(`${redirectUrl}?meta_status=success`);
@@ -154,6 +157,8 @@ const disconnect = asyncHandler(async (req, res) => {
   integration.accessToken = null;
   integration.tokenExpiresAt = null;
   await integration.save();
+
+  metaInsightService.invalidateUserCache(req.user._id);
 
   res.json({
     success: true,

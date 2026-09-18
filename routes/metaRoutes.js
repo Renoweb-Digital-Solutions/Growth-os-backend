@@ -97,6 +97,10 @@ router.get('/insights/social', protect, metaInsightController.getSocialInsights)
 // @desc    Consolidated post & media content insights list
 router.get('/insights/content', protect, metaInsightController.getContentInsights);
 
+// @route   GET /api/meta/insights/content/:contentId
+// @desc    Get details and insights for a specific published post/media item
+router.get('/insights/content/:contentId', protect, metaInsightController.getSingleContentInsights);
+
 // @route   GET /api/meta/insights/ads
 // @desc    Advertising Insights across Ad Accounts with derived metrics
 router.get('/insights/ads', protect, metaInsightController.getAdsInsights);

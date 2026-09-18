@@ -1,6 +1,7 @@
 const asyncHandler = require('../utils/asyncHandler');
 const MetaIntegration = require('../models/MetaIntegration');
 const metaService = require('../services/metaService');
+const metaInsightService = require('../services/metaInsightService');
 
 /**
  * Helper to fetch active accessToken for authenticated user
@@ -52,12 +53,25 @@ const validateDateRange = (since, until) => {
 // @route   GET /api/meta/assets
 // @access  Private (Protected by Gromentum JWT)
 const getAssets = asyncHandler(async (req, res) => {
-  const accessToken = await getAccessToken(req.user._id);
-  const result = await metaService.discoverAssets(accessToken, req.user._id);
+  const forceRefresh = req.query.refresh === 'true';
+  const ctx = await metaInsightService.getUserContextAndAssets(req.user._id, forceRefresh);
+
+  if (!ctx.integration || ctx.integration.status !== 'connected') {
+    const err = new Error('Meta account is not connected or authorization has expired');
+    err.statusCode = 401;
+    throw err;
+  }
+
+  const result = ctx.assets;
+
+  const safePages = result.pages.map((p) => {
+    const { pageToken, ...safePage } = p;
+    return safePage;
+  });
 
   res.json({
     success: true,
-    data: result,
+    data: { ...result, pages: safePages },
   });
 });
 
@@ -68,11 +82,16 @@ const getPages = asyncHandler(async (req, res) => {
   const accessToken = await getAccessToken(req.user._id);
   const pages = await metaService.getFacebookPages(accessToken, req.user._id);
 
+  const safePages = pages.map((p) => {
+    const { pageToken, ...safePage } = p;
+    return safePage;
+  });
+
   res.json({
     success: true,
     data: {
-      pages,
-      count: pages.length,
+      pages: safePages,
+      count: safePages.length,
     },
   });
 });
@@ -84,9 +103,11 @@ const getPageById = asyncHandler(async (req, res) => {
   const accessToken = await getAccessToken(req.user._id);
   const page = await metaService.getFacebookPageDetails(req.params.pageId, accessToken, req.user._id);
 
+  const { pageToken, ...safePage } = page;
+
   res.json({
     success: true,
-    data: page,
+    data: safePage,
   });
 });
 

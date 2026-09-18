@@ -69,6 +69,11 @@ const exchangeCodeForToken = async (code) => {
     const errorMsg = data.error?.message || 'Meta authorization code exchange failed';
     const err = new Error(errorMsg);
     err.metaError = data.error;
+    
+    if (data.error?.code === 4 || data.error?.code === 17 || data.error?.code === 32 || data.error?.code === 613) {
+      err.statusCode = 429;
+    }
+    
     throw err;
   }
 
@@ -107,32 +112,14 @@ const exchangeCodeForToken = async (code) => {
  * Fetches authenticated Meta user profile (/me)
  */
 const getMetaUserProfile = async (accessToken) => {
-  const version = getGraphApiVersion();
-  const url = `https://graph.facebook.com/${version}/me?access_token=${encodeURIComponent(accessToken)}`;
-
-  const response = await fetch(url);
-  const data = await response.json();
-
-  if (!response.ok || data.error) {
-    throw new Error(data.error?.message || 'Failed to fetch Meta user profile');
-  }
-
-  return data;
+  return await fetchGraphApi('/me', accessToken, {}, null, true);
 };
 
 /**
  * Fetches authoritatively granted scopes from Meta (/me/permissions)
  */
 const getGrantedPermissions = async (accessToken) => {
-  const version = getGraphApiVersion();
-  const url = `https://graph.facebook.com/${version}/me/permissions?access_token=${encodeURIComponent(accessToken)}`;
-
-  const response = await fetch(url);
-  const data = await response.json();
-
-  if (!response.ok || data.error) {
-    return [];
-  }
+  const data = await fetchGraphApi('/me/permissions', accessToken, {}, null, true);
 
   if (Array.isArray(data.data)) {
     return data.data
@@ -166,6 +153,12 @@ const fetchGraphApi = async (endpoint, accessToken, params = {}, userId = null, 
 
   const path = endpoint.startsWith('/') ? endpoint.slice(1) : endpoint;
   const url = `https://graph.facebook.com/${version}/${path}?${searchParams.toString()}`;
+  const safeUrl = `https://graph.facebook.com/${version}/${path}`;
+  
+  const reqId = Math.random().toString(36).substring(2, 9);
+  const ts = new Date().toISOString();
+
+  console.log(`[GRAPH] requestId=${reqId} purpose=meta_request endpoint=${path} timestamp=${ts} status=LAUNCHING metaCode=none`);
 
   let response;
   try {
@@ -176,6 +169,8 @@ const fetchGraphApi = async (endpoint, accessToken, params = {}, userId = null, 
   } catch (fetchError) {
     const rawCauseMessage = fetchError.cause?.message || fetchError.cause?.code || fetchError.message || 'Unknown network error';
     const safeCauseMessage = String(rawCauseMessage).replace(/access_token=[^&]+/gi, 'access_token=[REDACTED]');
+
+    console.log(`[GRAPH] requestId=${reqId} purpose=meta_request endpoint=${path} timestamp=${new Date().toISOString()} status=NETWORK_ERROR metaCode=none`);
 
     const err = new Error(`Meta Graph API network failure: ${safeCauseMessage}`);
     err.statusCode = 502;
@@ -196,6 +191,8 @@ const fetchGraphApi = async (endpoint, accessToken, params = {}, userId = null, 
     const code = errorInfo.code;
     const subcode = errorInfo.error_subcode;
     const message = errorInfo.message || 'Meta API request failed';
+
+    console.log(`[GRAPH] requestId=${reqId} purpose=meta_request endpoint=${path} timestamp=${new Date().toISOString()} status=${response.status} metaCode=${code}`);
 
     // Code 190: OAuth Access Token Expired or Revoked
     if (code === 190) {
@@ -248,6 +245,7 @@ const fetchGraphApi = async (endpoint, accessToken, params = {}, userId = null, 
     throw err;
   }
 
+  console.log(`[GRAPH] requestId=${reqId} purpose=meta_request endpoint=${path} timestamp=${new Date().toISOString()} status=${response.status} metaCode=none`);
   return data;
 };
 
@@ -314,6 +312,7 @@ const getFacebookPages = async (accessToken, userId = null) => {
   const rawPages = Array.isArray(response.data) ? response.data : [];
   return rawPages.map((page) => ({
     pageId: page.id,
+    pageToken: null,
     name: page.name,
     category: page.category || null,
     tasks: page.tasks || [],
@@ -355,27 +354,153 @@ const getFacebookPageDetails = async (pageId, accessToken, userId = null) => {
 /**
  * Fetches posts published on a Facebook Page using its Page Access Token
  */
-const getFacebookPagePosts = async (pageId, accessToken, paginationParams = {}, userId = null) => {
-  const pageToken = await getPageAccessToken(pageId, accessToken, userId);
-  const fields = 'id,message,created_time,full_picture,permalink_url,shares,reactions.summary(true),comments.summary(true),insights.metric(post_impressions,post_impressions_unique,post_engaged_users)';
-  const result = await fetchPaginatedGraphApi(`/${pageId}/posts`, pageToken, { ...paginationParams, fields }, userId, false);
+const getFacebookPagePosts = async (pageId, accessToken, paginationParams = {}, userId = null, preFetchedPageToken = null) => {
+  const resolvedPageToken = preFetchedPageToken || await getPageAccessToken(pageId, accessToken, userId);
+  const fields = 'id,message,created_time,full_picture,permalink_url,shares';
+  const result = await fetchPaginatedGraphApi(`/${pageId}/published_posts`, resolvedPageToken, { ...paginationParams, fields }, userId, false);
 
-  const normalizedPosts = result.data.map((post) => ({
-    postId: post.id,
-    message: post.message || '',
-    createdTime: post.created_time,
-    fullPicture: post.full_picture || null,
-    permalinkUrl: post.permalink_url || null,
-    shareCount: post.shares ? post.shares.count : 0,
-    reactionCount: post.reactions?.summary ? post.reactions.summary.total_count : 0,
-    commentCount: post.comments?.summary ? post.comments.summary.total_count : 0,
-    insightsData: post.insights?.data || [],
-  }));
+  const normalizedPosts = [];
+  let rateLimitHit = false;
+  const BATCH_SIZE = 5;
+
+  for (let i = 0; i < result.data.length; i += BATCH_SIZE) {
+    const batch = result.data.slice(i, i + BATCH_SIZE);
+    
+    if (rateLimitHit) {
+      // If a previous batch hit the rate limit, stop launching new insight requests
+      batch.forEach(post => {
+        normalizedPosts.push({
+          postId: post.id,
+          message: post.message || '',
+          createdTime: post.created_time,
+          fullPicture: post.full_picture || null,
+          permalinkUrl: post.permalink_url || null,
+          shareCount: post.shares ? post.shares.count : 0,
+          insightsData: [],
+        });
+      });
+      continue;
+    }
+
+    const batchPromises = batch.map(async (post) => {
+      let insightsData = [];
+      try {
+        const metric = 'post_impressions,post_impressions_unique,post_engaged_users,post_activity_by_action_type';
+        const insResult = await fetchGraphApi(`/${post.id}/insights`, resolvedPageToken, { metric }, userId, false);
+        insightsData = insResult.data || [];
+      } catch (err) {
+        if (err.statusCode === 429 || err.metaCode === 4) {
+          rateLimitHit = true;
+          throw err;
+        }
+        // Fallback: If post_activity_by_action_type fails or is unsupported for this post/version, try standard metrics
+        try {
+          const fallbackMetric = 'post_impressions,post_impressions_unique,post_engaged_users';
+          const insResult = await fetchGraphApi(`/${post.id}/insights`, resolvedPageToken, { metric: fallbackMetric }, userId, false);
+          insightsData = insResult.data || [];
+        } catch (fallbackErr) {
+          if (fallbackErr.statusCode === 429 || fallbackErr.metaCode === 4) {
+            rateLimitHit = true;
+            throw fallbackErr;
+          }
+        }
+      }
+
+      return {
+        postId: post.id,
+        message: post.message || '',
+        createdTime: post.created_time,
+        fullPicture: post.full_picture || null,
+        permalinkUrl: post.permalink_url || null,
+        shareCount: post.shares ? post.shares.count : 0,
+        insightsData,
+      };
+    });
+
+    try {
+      const mappedBatch = await Promise.all(batchPromises);
+      normalizedPosts.push(...mappedBatch);
+    } catch (err) {
+      if (err.statusCode === 429) {
+        // A rate limit error was thrown by one of the promises, halting the pipeline
+        throw err;
+      }
+    }
+  }
 
   return {
     posts: normalizedPosts,
     pagination: result.pagination,
   };
+};
+
+/**
+ * Fetches single Facebook post or Instagram media item directly by ID without fetching the feed
+ */
+const getSingleContent = async (contentId, accessToken, isInstagram = false, userId = null) => {
+  if (isInstagram) {
+    const fields = 'id,caption,media_type,media_product_type,media_url,permalink,timestamp,like_count,comments_count,owner';
+    const item = await fetchGraphApi(`/${contentId}`, accessToken, { fields }, userId);
+
+    let insightsData = [];
+    try {
+      let metric = 'impressions,reach,engagement,saved';
+      if (item.media_product_type === 'REELS') {
+        metric = 'plays,reach,saved';
+      } else if (item.media_type === 'CAROUSEL_ALBUM') {
+        metric = 'carousel_album_impressions,carousel_album_reach,carousel_album_engagement,carousel_album_saved';
+      }
+      const insResult = await fetchGraphApi(`/${item.id}/insights`, accessToken, { metric }, userId);
+      insightsData = insResult.data || [];
+    } catch (err) {
+      if (err.statusCode === 429 || err.metaCode === 4) throw err;
+    }
+
+    return {
+      mediaId: item.id,
+      caption: item.caption || '',
+      mediaType: item.media_type,
+      mediaProductType: item.media_product_type || null,
+      mediaUrl: item.media_url || null,
+      permalink: item.permalink || null,
+      timestamp: item.timestamp,
+      likeCount: item.like_count || 0,
+      commentCount: item.comments_count || 0,
+      owner: item.owner || null,
+      insightsData,
+    };
+  } else {
+    // Facebook Page Post
+    const fields = 'id,message,created_time,full_picture,permalink_url,shares,from';
+    const post = await fetchGraphApi(`/${contentId}`, accessToken, { fields }, userId, false);
+
+    let insightsData = [];
+    try {
+      const metric = 'post_impressions,post_impressions_unique,post_engaged_users,post_activity_by_action_type';
+      const insResult = await fetchGraphApi(`/${post.id}/insights`, accessToken, { metric }, userId, false);
+      insightsData = insResult.data || [];
+    } catch (err) {
+      if (err.statusCode === 429 || err.metaCode === 4) throw err;
+      try {
+        const fallbackMetric = 'post_impressions,post_impressions_unique,post_engaged_users';
+        const insResult = await fetchGraphApi(`/${post.id}/insights`, accessToken, { metric: fallbackMetric }, userId, false);
+        insightsData = insResult.data || [];
+      } catch (fallbackErr) {
+        if (fallbackErr.statusCode === 429 || fallbackErr.metaCode === 4) throw fallbackErr;
+      }
+    }
+
+    return {
+      postId: post.id,
+      message: post.message || '',
+      createdTime: post.created_time,
+      fullPicture: post.full_picture || null,
+      permalinkUrl: post.permalink_url || null,
+      shareCount: post.shares ? post.shares.count : 0,
+      from: post.from || null,
+      insightsData,
+    };
+  }
 };
 
 /**
@@ -438,36 +563,75 @@ const getInstagramMedia = async (instagramAccountId, accessToken, paginationPara
   const fields = 'id,caption,media_type,media_product_type,media_url,permalink,timestamp,like_count,comments_count';
   const result = await fetchPaginatedGraphApi(`/${instagramAccountId}/media`, accessToken, { ...paginationParams, fields }, userId);
 
-  const normalizedMedia = await Promise.all(result.data.map(async (item) => {
-    let insightsData = [];
-    
-    try {
-      let metric = 'impressions,reach,engagement,saved';
-      if (item.media_product_type === 'REELS') {
-        metric = 'plays,reach,saved';
-      } else if (item.media_type === 'CAROUSEL_ALBUM') {
-        metric = 'carousel_album_impressions,carousel_album_reach,carousel_album_engagement,carousel_album_saved';
-      }
+  const normalizedMedia = [];
+  let rateLimitHit = false;
+  const BATCH_SIZE = 5;
 
-      const insResult = await fetchGraphApi(`/${item.id}/insights`, accessToken, { metric }, userId);
-      insightsData = insResult.data || [];
-    } catch (err) {
-      // Gracefully ignore unsupported media type errors or missing metrics
+  for (let i = 0; i < result.data.length; i += BATCH_SIZE) {
+    const batch = result.data.slice(i, i + BATCH_SIZE);
+    
+    if (rateLimitHit) {
+      batch.forEach(item => {
+        normalizedMedia.push({
+          mediaId: item.id,
+          caption: item.caption || '',
+          mediaType: item.media_type,
+          mediaProductType: item.media_product_type || null,
+          mediaUrl: item.media_url || null,
+          permalink: item.permalink || null,
+          timestamp: item.timestamp,
+          likeCount: item.like_count || 0,
+          commentCount: item.comments_count || 0,
+          insightsData: [],
+        });
+      });
+      continue;
     }
 
-    return {
-      mediaId: item.id,
-      caption: item.caption || '',
-      mediaType: item.media_type,
-      mediaProductType: item.media_product_type || null,
-      mediaUrl: item.media_url || null,
-      permalink: item.permalink || null,
-      timestamp: item.timestamp,
-      likeCount: item.like_count || 0,
-      commentCount: item.comments_count || 0,
-      insightsData,
-    };
-  }));
+    const batchPromises = batch.map(async (item) => {
+      let insightsData = [];
+      
+      try {
+        let metric = 'impressions,reach,engagement,saved';
+        if (item.media_product_type === 'REELS') {
+          metric = 'plays,reach,saved';
+        } else if (item.media_type === 'CAROUSEL_ALBUM') {
+          metric = 'carousel_album_impressions,carousel_album_reach,carousel_album_engagement,carousel_album_saved';
+        }
+
+        const insResult = await fetchGraphApi(`/${item.id}/insights`, accessToken, { metric }, userId);
+        insightsData = insResult.data || [];
+      } catch (err) {
+        if (err.statusCode === 429 || err.metaCode === 4) {
+          rateLimitHit = true;
+          throw err;
+        }
+        // Gracefully ignore unsupported media type errors or missing metrics
+      }
+
+      return {
+        mediaId: item.id,
+        caption: item.caption || '',
+        mediaType: item.media_type,
+        mediaProductType: item.media_product_type || null,
+        mediaUrl: item.media_url || null,
+        permalink: item.permalink || null,
+        timestamp: item.timestamp,
+        likeCount: item.like_count || 0,
+        commentCount: item.comments_count || 0,
+        insightsData,
+      };
+    });
+
+    try {
+      const mappedBatch = await Promise.all(batchPromises);
+      normalizedMedia.push(...mappedBatch);
+    } catch (err) {
+      if (err.statusCode === 429) {
+        throw err;
+      }
+    }
+  }
 
   return {
     media: normalizedMedia,
@@ -713,13 +877,23 @@ const discoverAssets = async (accessToken, userId = null) => {
   const pages = await getFacebookPages(accessToken, userId);
   const instagramAccounts = [];
   const seenIgIds = new Set();
+  
+  console.log(`[Meta Graph API] Asset Discovery | GET /me/accounts returned ${pages.length} pages`);
 
-  pages.forEach((page) => {
+  for (const page of pages) {
+    try {
+      page.pageToken = await getPageAccessToken(page.pageId, accessToken, userId);
+      console.log(`[Meta Graph API] Asset Discovery | Fetched pageToken for Page ID ${page.pageId} (Success)`);
+    } catch (err) {
+      console.log(`[Meta Graph API] Asset Discovery | Fetched pageToken for Page ID ${page.pageId} (Failed: ${err.metaCode || 'UNKNOWN'})`);
+      page.pageToken = null;
+    }
+
     if (page.instagramAccount && !seenIgIds.has(page.instagramAccount.instagramAccountId)) {
       seenIgIds.add(page.instagramAccount.instagramAccountId);
       instagramAccounts.push(page.instagramAccount);
     }
-  });
+  }
 
   let adAccounts = [];
   try {
@@ -761,4 +935,5 @@ module.exports = {
   getAdSets,
   getAds,
   getAdsInsights,
+  getSingleContent,
 };
