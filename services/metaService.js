@@ -130,6 +130,37 @@ const getGrantedPermissions = async (accessToken) => {
   return [];
 };
 
+/**
+ * Helper to parse YYYY-MM-DD date string or timestamp into integer Unix timestamp (seconds)
+ */
+const toUnixTimestamp = (dateVal, isEndOfDay = false) => {
+  if (!dateVal) return null;
+  if (typeof dateVal === 'number' && Number.isFinite(dateVal)) {
+    return Math.floor(dateVal);
+  }
+  const strVal = String(dateVal).trim();
+  if (!strVal) return null;
+
+  if (/^\d{9,12}$/.test(strVal)) {
+    const parsedInt = parseInt(strVal, 10);
+    return Number.isFinite(parsedInt) ? parsedInt : null;
+  }
+
+  const dateObj = new Date(strVal);
+  if (isNaN(dateObj.getTime())) return null;
+
+  if (/^\d{4}-\d{2}-\d{2}$/.test(strVal)) {
+    if (isEndOfDay) {
+      dateObj.setUTCHours(23, 59, 59, 999);
+    } else {
+      dateObj.setUTCHours(0, 0, 0, 0);
+    }
+  }
+
+  const ts = Math.floor(dateObj.getTime() / 1000);
+  return Number.isFinite(ts) ? ts : null;
+};
+
 // ============================================================================
 // PHASE 2 — GRAPH API FETCH & ERROR NORMALIZATION ENGINE
 // ============================================================================
@@ -307,7 +338,30 @@ const getPageAccessToken = async (pageId, userAccessToken, userId = null) => {
  */
 const getFacebookPages = async (accessToken, userId = null) => {
   const fields = 'id,name,category,category_list,tasks,instagram_business_account{id,username,name,profile_picture_url,followers_count,media_count}';
-  const response = await fetchGraphApi('/me/accounts', accessToken, { fields }, userId, true);
+  
+  let response;
+  try {
+    response = await fetchGraphApi('/me/accounts', accessToken, { fields }, userId, true);
+    
+    // Instrumenting successful response
+    const dataLen = Array.isArray(response.data) ? response.data.length : 0;
+    const pageIdsAndNames = Array.isArray(response.data) ? response.data.map(p => ({ id: p.id, name: p.name })) : [];
+    console.log(`[INSTRUMENTATION /me/accounts] HTTP Status: 200`);
+    console.log(`[INSTRUMENTATION /me/accounts] data.length: ${dataLen}`);
+    console.log(`[INSTRUMENTATION /me/accounts] pages: ${JSON.stringify(pageIdsAndNames)}`);
+    console.log(`[INSTRUMENTATION /me/accounts] paging presence: ${Boolean(response.paging)}`);
+  } catch (error) {
+    // Instrumenting error response
+    console.log(`[INSTRUMENTATION /me/accounts] HTTP Status: ${error.statusCode || 500}`);
+    if (error.metaError) {
+      console.log(`[INSTRUMENTATION /me/accounts] Error Code: ${error.metaError.code}`);
+      console.log(`[INSTRUMENTATION /me/accounts] Error Type: ${error.metaError.type}`);
+      console.log(`[INSTRUMENTATION /me/accounts] Error Message: ${error.metaError.message}`);
+    } else {
+      console.log(`[INSTRUMENTATION /me/accounts] Error Message: ${error.message}`);
+    }
+    throw error;
+  }
 
   const rawPages = Array.isArray(response.data) ? response.data : [];
   return rawPages.map((page) => ({
@@ -509,12 +563,18 @@ const getSingleContent = async (contentId, accessToken, isInstagram = false, use
 const getFacebookPageInsights = async (pageId, accessToken, timeParams = {}, userId = null) => {
   const pageToken = await getPageAccessToken(pageId, accessToken, userId);
   const params = {
-    metric: 'page_views_total,page_fan_adds,page_engaged_users,page_impressions,page_post_engagements',
+    metric: 'page_post_engagements,page_daily_follows',
     period: 'day',
   };
 
-  if (timeParams.since) params.since = timeParams.since;
-  if (timeParams.until) params.until = timeParams.until;
+  if (timeParams.since) {
+    const sinceTs = toUnixTimestamp(timeParams.since, false);
+    if (sinceTs !== null) params.since = sinceTs;
+  }
+  if (timeParams.until) {
+    const untilTs = toUnixTimestamp(timeParams.until, true);
+    if (untilTs !== null) params.until = untilTs;
+  }
 
   const response = await fetchGraphApi(`/${pageId}/insights`, pageToken, params, userId, false);
   const metricsData = Array.isArray(response.data) ? response.data : [];
@@ -644,12 +704,23 @@ const getInstagramMedia = async (instagramAccountId, accessToken, paginationPara
  */
 const getInstagramInsights = async (instagramAccountId, accessToken, timeParams = {}, userId = null) => {
   const params = {
-    metric: 'impressions,reach,profile_views,follower_count',
+    metric: 'reach',
     period: 'day',
   };
 
-  if (timeParams.since) params.since = timeParams.since;
-  if (timeParams.until) params.until = timeParams.until;
+  if (timeParams.since) {
+    const sinceTs = toUnixTimestamp(timeParams.since, false);
+    if (sinceTs !== null) params.since = sinceTs;
+  }
+  if (timeParams.until) {
+    const untilTs = toUnixTimestamp(timeParams.until, true);
+    if (untilTs !== null) params.until = untilTs;
+  }
+
+  // Cap Graph API request window to Meta's maximum 30-day (2,592,000s) Insights limit
+  if (params.since && params.until && (params.until - params.since >= 2592000)) {
+    params.until = params.since + (30 * 24 * 60 * 60 - 1);
+  }
 
   const response = await fetchGraphApi(`/${instagramAccountId}/insights`, accessToken, params, userId);
   const metricsData = Array.isArray(response.data) ? response.data : [];

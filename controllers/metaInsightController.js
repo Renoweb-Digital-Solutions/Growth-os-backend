@@ -33,10 +33,18 @@ const validateDateRange = (since, until) => {
 // @route   GET /api/meta/insights/overview
 // @access  Private (Protected by Gromentum JWT)
 const getOverview = asyncHandler(async (req, res) => {
-  const { datePreset, since, until } = req.query;
+  const { pageId, instagramAccountId, instagramId, adAccountId, datePreset, since, until } = req.query;
   validateDateRange(since, until);
 
-  const result = await metaInsightService.getOverview(req.user._id, { datePreset, since, until });
+  const result = await metaInsightService.getOverview(req.user._id, {
+    pageId,
+    instagramAccountId: instagramAccountId || instagramId,
+    instagramId,
+    adAccountId,
+    datePreset,
+    since,
+    until,
+  });
 
   res.json({
     success: true,
@@ -49,12 +57,13 @@ const getOverview = asyncHandler(async (req, res) => {
 // @route   GET /api/meta/insights/social
 // @access  Private (Protected by Gromentum JWT)
 const getSocialInsights = asyncHandler(async (req, res) => {
-  const { pageId, instagramAccountId, datePreset, since, until } = req.query;
+  const { pageId, instagramAccountId, instagramId, datePreset, since, until } = req.query;
   validateDateRange(since, until);
 
   const result = await metaInsightService.getSocialInsights(req.user._id, {
     pageId,
-    instagramAccountId,
+    instagramAccountId: instagramAccountId || instagramId,
+    instagramId,
     datePreset,
     since,
     until,
@@ -71,10 +80,13 @@ const getSocialInsights = asyncHandler(async (req, res) => {
 // @route   GET /api/meta/insights/content
 // @access  Private (Protected by Gromentum JWT)
 const getContentInsights = asyncHandler(async (req, res) => {
-  const { platform, limit, after, since, until, datePreset } = req.query;
+  const { pageId, instagramAccountId, instagramId, platform, limit, after, since, until, datePreset } = req.query;
   validateDateRange(since, until);
 
   const result = await metaInsightService.getContentInsights(req.user._id, {
+    pageId,
+    instagramAccountId: instagramAccountId || instagramId,
+    instagramId,
     platform,
     limit,
     after,

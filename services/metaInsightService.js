@@ -133,6 +133,40 @@ const contextCache = new Map();
 const inFlightRequests = new Map();
 const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes TTL
 
+/**
+ * Helper to resolve and validate a Facebook Page from user discovered assets
+ */
+const resolveFacebookPage = (assets, pageId) => {
+  const pages = assets?.pages || [];
+  if (pageId) {
+    return pages.find((p) => String(p.pageId) === String(pageId)) || null;
+  }
+  return pages.length > 0 ? pages[0] : null;
+};
+
+/**
+ * Helper to resolve and validate an Instagram Professional Account from user discovered assets
+ */
+const resolveInstagramAccount = (assets, instagramAccountId, instagramId) => {
+  const igAccounts = assets?.instagramAccounts || [];
+  const targetId = instagramAccountId || instagramId;
+  if (targetId) {
+    return igAccounts.find((ig) => String(ig.instagramAccountId) === String(targetId)) || null;
+  }
+  return igAccounts.length > 0 ? igAccounts[0] : null;
+};
+
+/**
+ * Helper to resolve and validate a Meta Ad Account from user discovered assets
+ */
+const resolveAdAccount = (assets, adAccountId) => {
+  const adAccounts = assets?.adAccounts || [];
+  if (adAccountId) {
+    return adAccounts.find((a) => String(a.adAccountId) === String(adAccountId)) || null;
+  }
+  return adAccounts.length > 0 ? adAccounts[0] : null;
+};
+
 const invalidateUserCache = (userId) => {
   const key = String(userId);
   contextCache.delete(key);
@@ -209,12 +243,15 @@ const getOverview = async (userId, timeParams = {}) => {
   const ctx = await getUserContextAndAssets(userId);
   const { integration, assets, capabilities } = ctx;
 
+  const targetAdAcc = resolveAdAccount(assets, timeParams.adAccountId);
+  const targetPage = resolveFacebookPage(assets, timeParams.pageId);
+  const targetIg = resolveInstagramAccount(assets, timeParams.instagramAccountId, timeParams.instagramId);
+
   let adsOverview = null;
-  if (capabilities.ads.available && assets.adAccounts.length > 0) {
-    const defaultAdAcc = assets.adAccounts[0];
+  if (capabilities.ads.available && targetAdAcc) {
     try {
       const insightsResult = await metaService.getAdsInsights(
-        defaultAdAcc.adAccountId,
+        targetAdAcc.adAccountId,
         integration.accessToken,
         timeParams,
         userId
@@ -231,10 +268,10 @@ const getOverview = async (userId, timeParams = {}) => {
       const cpm = totalImpressions > 0 ? (totalSpend / totalImpressions) * 1000 : 0;
 
       adsOverview = {
-        adAccountId: defaultAdAcc.adAccountId,
-        adAccountName: defaultAdAcc.name,
-        currency: defaultAdAcc.currency,
-        timezone: defaultAdAcc.timezone,
+        adAccountId: targetAdAcc.adAccountId,
+        adAccountName: targetAdAcc.name,
+        currency: targetAdAcc.currency,
+        timezone: targetAdAcc.timezone,
         spend: Number(totalSpend.toFixed(2)),
         impressions: totalImpressions,
         clicks: totalClicks,
@@ -244,37 +281,39 @@ const getOverview = async (userId, timeParams = {}) => {
         cpm: Number(cpm.toFixed(4)),
       };
     } catch (err) {
+      const safeMsg = err.message ? err.message.replace(/access_token=[^&]+/gi, '[REDACTED]') : 'Unknown error';
+      console.log(`[OVERVIEW] Ads overview error for adAccountId=${targetAdAcc.adAccountId}: ${safeMsg}`);
       adsOverview = null;
     }
   }
 
   let socialOverview = null;
-  if (capabilities.social.available && assets.pages.length > 0) {
-    const defaultPage = assets.pages[0];
+  if (capabilities.social.available && targetPage) {
     try {
-      const pageDetails = await metaService.getFacebookPageDetails(defaultPage.pageId, integration.accessToken, userId);
-      const pageInsights = await metaService.getFacebookPageInsights(defaultPage.pageId, integration.accessToken, timeParams, userId);
+      const pageDetails = await metaService.getFacebookPageDetails(targetPage.pageId, integration.accessToken, userId);
+      const pageInsights = await metaService.getFacebookPageInsights(targetPage.pageId, integration.accessToken, timeParams, userId);
 
       socialOverview = {
-        pageId: defaultPage.pageId,
+        pageId: targetPage.pageId,
         pageName: pageDetails.name,
         followersCount: pageDetails.followersCount,
         fanCount: pageDetails.fanCount,
         metrics: pageInsights.metrics || [],
       };
     } catch (err) {
+      const safeMsg = err.message ? err.message.replace(/access_token=[^&]+/gi, '[REDACTED]') : 'Unknown error';
+      console.log(`[OVERVIEW] Social overview error for pageId=${targetPage.pageId}: ${safeMsg}`);
       socialOverview = null;
     }
   }
 
   let instagramOverview = null;
   let instagramTruncated = false;
-  if (capabilities.instagram.available && assets.instagramAccounts.length > 0) {
-    const defaultIg = assets.instagramAccounts[0];
+  if (capabilities.instagram.available && targetIg) {
     try {
       const allMediaResult = await fetchWithDateBoundary(
         metaService.getInstagramMedia,
-        defaultIg.instagramAccountId,
+        targetIg.instagramAccountId,
         integration.accessToken,
         timeParams,
         userId,
@@ -284,13 +323,15 @@ const getOverview = async (userId, timeParams = {}) => {
       instagramTruncated = allMediaResult.paginationTruncated;
 
       instagramOverview = {
-        instagramAccountId: defaultIg.instagramAccountId,
-        username: defaultIg.username,
-        followersCount: defaultIg.followersCount,
-        lifetimeMediaCatalogCount: defaultIg.mediaCount, // Profile lifetime static count
+        instagramAccountId: targetIg.instagramAccountId,
+        username: targetIg.username,
+        followersCount: targetIg.followersCount,
+        lifetimeMediaCatalogCount: targetIg.mediaCount, // Profile lifetime static count
         publishedMediaInPeriod: inPeriodMedia.length, // Time-bounded published count
       };
     } catch (err) {
+      const safeMsg = err.message ? err.message.replace(/access_token=[^&]+/gi, '[REDACTED]') : 'Unknown error';
+      console.log(`[OVERVIEW] Instagram overview error for instagramAccountId=${targetIg.instagramAccountId}: ${safeMsg}`);
       instagramOverview = null;
     }
   }
@@ -307,7 +348,7 @@ const getOverview = async (userId, timeParams = {}) => {
         since: timeParams.since || null,
         until: timeParams.until || null,
         preset: timeParams.datePreset || null,
-        timezone: assets.adAccounts[0]?.timezone || 'UTC',
+        timezone: targetAdAcc?.timezone || assets.adAccounts[0]?.timezone || 'UTC',
       },
       capabilities,
       complete: !instagramTruncated,
@@ -324,32 +365,47 @@ const getSocialInsights = async (userId, queryParams = {}) => {
   const ctx = await getUserContextAndAssets(userId);
   const { integration, assets, capabilities } = ctx;
 
-  const targetPageId = queryParams.pageId || (assets.pages[0] ? assets.pages[0].pageId : null);
-  const targetIgId = queryParams.instagramAccountId || (assets.instagramAccounts[0] ? assets.instagramAccounts[0].instagramAccountId : null);
+  const targetPage = resolveFacebookPage(assets, queryParams.pageId);
+  const targetIg = resolveInstagramAccount(assets, queryParams.instagramAccountId, queryParams.instagramId);
 
   let pageData = null;
-  if (capabilities.social.available && targetPageId) {
+  if (capabilities.social.available && targetPage) {
+    let details = null;
     try {
-      const details = await metaService.getFacebookPageDetails(targetPageId, integration.accessToken, userId);
-      const insights = await metaService.getFacebookPageInsights(targetPageId, integration.accessToken, queryParams, userId);
+      details = await metaService.getFacebookPageDetails(targetPage.pageId, integration.accessToken, userId);
+    } catch (err) {
+      const safeMsg = err.message ? err.message.replace(/access_token=[^&]+/gi, '[REDACTED]') : 'Unknown error';
+      console.log(`[SOCIAL_INSIGHTS] Page details error for pageId=${targetPage.pageId}: ${safeMsg}`);
+    }
+
+    if (details) {
+      let insightsMetrics = [];
+      try {
+        const insights = await metaService.getFacebookPageInsights(targetPage.pageId, integration.accessToken, queryParams, userId);
+        insightsMetrics = insights.metrics || [];
+      } catch (err) {
+        const safeMsg = err.message ? err.message.replace(/access_token=[^&]+/gi, '[REDACTED]') : 'Unknown error';
+        console.log(`[SOCIAL_INSIGHTS] Page insights error for pageId=${targetPage.pageId}: ${safeMsg}`);
+      }
+
       pageData = {
         details,
-        insights: insights.metrics,
+        insights: insightsMetrics,
       };
-    } catch (err) {
-      pageData = null;
     }
   }
 
   let instagramData = null;
-  if (capabilities.instagram.available && targetIgId) {
+  if (capabilities.instagram.available && targetIg) {
     try {
-      const insights = await metaService.getInstagramInsights(targetIgId, integration.accessToken, queryParams, userId);
+      const insights = await metaService.getInstagramInsights(targetIg.instagramAccountId, integration.accessToken, queryParams, userId);
       instagramData = {
-        instagramAccountId: targetIgId,
-        insights: insights.metrics,
+        instagramAccountId: targetIg.instagramAccountId,
+        insights: insights.metrics || [],
       };
     } catch (err) {
+      const safeMsg = err.message ? err.message.replace(/access_token=[^&]+/gi, '[REDACTED]') : 'Unknown error';
+      console.log(`[SOCIAL_INSIGHTS] Instagram insights error for instagramAccountId=${targetIg.instagramAccountId}: ${safeMsg}`);
       instagramData = null;
     }
   }
@@ -506,21 +562,24 @@ const getContentInsights = async (userId, queryParams = {}) => {
   const ctx = await getUserContextAndAssets(userId);
   const { integration, assets, capabilities } = ctx;
 
+  const targetPage = resolveFacebookPage(assets, queryParams.pageId);
+  const targetIg = resolveInstagramAccount(assets, queryParams.instagramAccountId, queryParams.instagramId);
+
   const platform = queryParams.platform || 'all';
   let facebookPosts = [];
   let instagramMedia = [];
   let facebookTruncated = false;
   let instagramTruncated = false;
 
-  if ((platform === 'all' || platform === 'facebook') && capabilities.social.available && assets.pages[0]) {
+  if ((platform === 'all' || platform === 'facebook') && capabilities.social.available && targetPage) {
     const fbResult = await fetchWithDateBoundary(
       metaService.getFacebookPagePosts,
-      assets.pages[0].pageId,
+      targetPage.pageId,
       integration.accessToken,
       queryParams,
       userId,
       'posts',
-      assets.pages[0].pageToken
+      targetPage.pageToken
     );
     facebookTruncated = fbResult.paginationTruncated;
     
@@ -539,10 +598,10 @@ const getContentInsights = async (userId, queryParams = {}) => {
     });
   }
 
-  if ((platform === 'all' || platform === 'instagram') && capabilities.instagram.available && assets.instagramAccounts[0]) {
+  if ((platform === 'all' || platform === 'instagram') && capabilities.instagram.available && targetIg) {
     const igResult = await fetchWithDateBoundary(
       metaService.getInstagramMedia,
-      assets.instagramAccounts[0].instagramAccountId,
+      targetIg.instagramAccountId,
       integration.accessToken,
       queryParams,
       userId,
@@ -754,7 +813,9 @@ const getAdsInsights = async (userId, queryParams = {}) => {
   const ctx = await getUserContextAndAssets(userId);
   const { integration, assets, capabilities } = ctx;
 
-  if (!capabilities.ads.available || assets.adAccounts.length === 0) {
+  const targetAdAcc = resolveAdAccount(assets, queryParams.adAccountId);
+
+  if (!capabilities.ads.available || !targetAdAcc) {
     return {
       data: null,
       meta: {
@@ -770,16 +831,14 @@ const getAdsInsights = async (userId, queryParams = {}) => {
     };
   }
 
-  const targetAdAccId = queryParams.adAccountId || assets.adAccounts[0].adAccountId;
-  const adAccInfo = assets.adAccounts.find((a) => a.adAccountId === targetAdAccId) || assets.adAccounts[0];
-
+  const targetAdAccId = targetAdAcc.adAccountId;
   const result = await metaService.getAdsInsights(targetAdAccId, integration.accessToken, queryParams, userId);
 
   return {
     data: {
       adAccountId: targetAdAccId,
-      currency: adAccInfo.currency,
-      timezone: adAccInfo.timezone,
+      currency: targetAdAcc.currency,
+      timezone: targetAdAcc.timezone,
       insights: result.insights,
     },
     meta: {
@@ -788,7 +847,7 @@ const getAdsInsights = async (userId, queryParams = {}) => {
         since: queryParams.since || null,
         until: queryParams.until || null,
         preset: queryParams.datePreset || null,
-        timezone: adAccInfo.timezone || 'UTC',
+        timezone: targetAdAcc.timezone || 'UTC',
       },
       capabilities,
     },
@@ -803,7 +862,9 @@ const getCampaignInsights = async (userId, queryParams = {}) => {
   const ctx = await getUserContextAndAssets(userId);
   const { integration, assets, capabilities } = ctx;
 
-  if (!capabilities.ads.available || assets.adAccounts.length === 0) {
+  const targetAdAcc = resolveAdAccount(assets, queryParams.adAccountId);
+
+  if (!capabilities.ads.available || !targetAdAcc) {
     return {
       data: null,
       meta: {
@@ -819,9 +880,8 @@ const getCampaignInsights = async (userId, queryParams = {}) => {
     };
   }
 
-  const targetAdAccId = queryParams.adAccountId || assets.adAccounts[0].adAccountId;
-  const adAccInfo = assets.adAccounts.find((a) => a.adAccountId === targetAdAccId) || assets.adAccounts[0];
-  const divisor = getCurrencyDivisor(adAccInfo.currency);
+  const targetAdAccId = targetAdAcc.adAccountId;
+  const divisor = getCurrencyDivisor(targetAdAcc.currency);
 
   const campaignResult = await metaService.getCampaigns(targetAdAccId, integration.accessToken, queryParams, userId);
   
@@ -845,7 +905,7 @@ const getCampaignInsights = async (userId, queryParams = {}) => {
       startTime: c.startTime,
       stopTime: c.stopTime,
       budget: {
-        currency: adAccInfo.currency,
+        currency: targetAdAcc.currency,
         dailyBudgetSubunits: c.dailyBudget, // Raw integer subunits
         dailyBudgetFormatted: c.dailyBudget ? Number((c.dailyBudget / divisor).toFixed(2)) : null,
         lifetimeBudgetSubunits: c.lifetimeBudget,
@@ -866,7 +926,7 @@ const getCampaignInsights = async (userId, queryParams = {}) => {
   return {
     data: {
       adAccountId: targetAdAccId,
-      currency: adAccInfo.currency,
+      currency: targetAdAcc.currency,
       campaigns: normalizedCampaigns,
       pagination: campaignResult.pagination,
     },
@@ -876,7 +936,7 @@ const getCampaignInsights = async (userId, queryParams = {}) => {
         since: queryParams.since || null,
         until: queryParams.until || null,
         preset: queryParams.datePreset || null,
-        timezone: adAccInfo.timezone || 'UTC',
+        timezone: targetAdAcc.timezone || 'UTC',
       },
       capabilities,
     },
@@ -891,7 +951,9 @@ const getAdSetInsights = async (userId, queryParams = {}) => {
   const ctx = await getUserContextAndAssets(userId);
   const { integration, assets, capabilities } = ctx;
 
-  if (!capabilities.ads.available || assets.adAccounts.length === 0) {
+  const targetAdAcc = resolveAdAccount(assets, queryParams.adAccountId);
+
+  if (!capabilities.ads.available || !targetAdAcc) {
     return {
       data: null,
       meta: {
@@ -907,9 +969,8 @@ const getAdSetInsights = async (userId, queryParams = {}) => {
     };
   }
 
-  const targetAdAccId = queryParams.adAccountId || assets.adAccounts[0].adAccountId;
-  const adAccInfo = assets.adAccounts.find((a) => a.adAccountId === targetAdAccId) || assets.adAccounts[0];
-  const divisor = getCurrencyDivisor(adAccInfo.currency);
+  const targetAdAccId = targetAdAcc.adAccountId;
+  const divisor = getCurrencyDivisor(targetAdAcc.currency);
 
   const adSetResult = await metaService.getAdSets(targetAdAccId, integration.accessToken, queryParams, userId);
   
@@ -934,7 +995,7 @@ const getAdSetInsights = async (userId, queryParams = {}) => {
       startTime: adSet.startTime,
       endTime: adSet.endTime,
       budget: {
-        currency: adAccInfo.currency,
+        currency: targetAdAcc.currency,
         dailyBudgetSubunits: adSet.dailyBudget, // Raw integer subunits
         dailyBudgetFormatted: adSet.dailyBudget ? Number((adSet.dailyBudget / divisor).toFixed(2)) : null,
         lifetimeBudgetSubunits: adSet.lifetimeBudget,
@@ -955,7 +1016,7 @@ const getAdSetInsights = async (userId, queryParams = {}) => {
   return {
     data: {
       adAccountId: targetAdAccId,
-      currency: adAccInfo.currency,
+      currency: targetAdAcc.currency,
       adSets: normalizedAdSets,
       pagination: adSetResult.pagination,
     },
@@ -965,7 +1026,7 @@ const getAdSetInsights = async (userId, queryParams = {}) => {
         since: queryParams.since || null,
         until: queryParams.until || null,
         preset: queryParams.datePreset || null,
-        timezone: adAccInfo.timezone || 'UTC',
+        timezone: targetAdAcc.timezone || 'UTC',
       },
       capabilities,
     },
@@ -980,7 +1041,9 @@ const getAdInsights = async (userId, queryParams = {}) => {
   const ctx = await getUserContextAndAssets(userId);
   const { integration, assets, capabilities } = ctx;
 
-  if (!capabilities.ads.available || assets.adAccounts.length === 0) {
+  const targetAdAcc = resolveAdAccount(assets, queryParams.adAccountId);
+
+  if (!capabilities.ads.available || !targetAdAcc) {
     return {
       data: null,
       meta: {
@@ -996,8 +1059,7 @@ const getAdInsights = async (userId, queryParams = {}) => {
     };
   }
 
-  const targetAdAccId = queryParams.adAccountId || assets.adAccounts[0].adAccountId;
-  const adAccInfo = assets.adAccounts.find((a) => a.adAccountId === targetAdAccId) || assets.adAccounts[0];
+  const targetAdAccId = targetAdAcc.adAccountId;
 
   const adResult = await metaService.getAds(targetAdAccId, integration.accessToken, queryParams, userId);
   
@@ -1035,7 +1097,7 @@ const getAdInsights = async (userId, queryParams = {}) => {
   return {
     data: {
       adAccountId: targetAdAccId,
-      currency: adAccInfo.currency,
+      currency: targetAdAcc.currency,
       ads: normalizedAds,
       pagination: adResult.pagination,
     },
@@ -1045,7 +1107,7 @@ const getAdInsights = async (userId, queryParams = {}) => {
         since: queryParams.since || null,
         until: queryParams.until || null,
         preset: queryParams.datePreset || null,
-        timezone: adAccInfo.timezone || 'UTC',
+        timezone: targetAdAcc.timezone || 'UTC',
       },
       capabilities,
     },
