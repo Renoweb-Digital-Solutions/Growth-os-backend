@@ -36,7 +36,7 @@ const buildAuthorizationUrl = (state) => {
   } else {
     params.append(
       'scope',
-      'ads_read,pages_show_list,pages_read_engagement,instagram_basic,instagram_manage_insights'
+      'ads_read,pages_show_list,pages_read_engagement,read_insights,instagram_basic,instagram_manage_insights'
     );
   }
 
@@ -397,8 +397,8 @@ const getFacebookPageDetails = async (pageId, accessToken, userId = null) => {
     pageId: page.id,
     name: page.name,
     category: page.category || null,
-    fanCount: page.fan_count || 0,
-    followersCount: page.followers_count || 0,
+    fanCount: typeof page.fan_count === 'number' ? page.fan_count : null,
+    followersCount: typeof page.followers_count === 'number' ? page.followers_count : null,
     link: page.link || null,
     about: page.about || null,
     website: page.website || null,
@@ -429,7 +429,7 @@ const getFacebookPagePosts = async (pageId, accessToken, paginationParams = {}, 
           createdTime: post.created_time,
           fullPicture: post.full_picture || null,
           permalinkUrl: post.permalink_url || null,
-          shareCount: post.shares ? post.shares.count : 0,
+          shareCount: post.shares && typeof post.shares.count === 'number' ? post.shares.count : null,
           insightsData: [],
         });
       });
@@ -439,7 +439,7 @@ const getFacebookPagePosts = async (pageId, accessToken, paginationParams = {}, 
     const batchPromises = batch.map(async (post) => {
       let insightsData = [];
       try {
-        const metric = 'post_impressions,post_impressions_unique,post_engaged_users,post_activity_by_action_type';
+        const metric = 'post_engaged_users';
         const insResult = await fetchGraphApi(`/${post.id}/insights`, resolvedPageToken, { metric }, userId, false);
         insightsData = insResult.data || [];
       } catch (err) {
@@ -447,17 +447,8 @@ const getFacebookPagePosts = async (pageId, accessToken, paginationParams = {}, 
           rateLimitHit = true;
           throw err;
         }
-        // Fallback: If post_activity_by_action_type fails or is unsupported for this post/version, try standard metrics
-        try {
-          const fallbackMetric = 'post_impressions,post_impressions_unique,post_engaged_users';
-          const insResult = await fetchGraphApi(`/${post.id}/insights`, resolvedPageToken, { metric: fallbackMetric }, userId, false);
-          insightsData = insResult.data || [];
-        } catch (fallbackErr) {
-          if (fallbackErr.statusCode === 429 || fallbackErr.metaCode === 4) {
-            rateLimitHit = true;
-            throw fallbackErr;
-          }
-        }
+        // Gracefully ignore missing/unsupported post insights without failing post retrieval
+        insightsData = [];
       }
 
       return {
@@ -466,7 +457,7 @@ const getFacebookPagePosts = async (pageId, accessToken, paginationParams = {}, 
         createdTime: post.created_time,
         fullPicture: post.full_picture || null,
         permalinkUrl: post.permalink_url || null,
-        shareCount: post.shares ? post.shares.count : 0,
+        shareCount: post.shares && typeof post.shares.count === 'number' ? post.shares.count : null,
         insightsData,
       };
     });
@@ -530,18 +521,12 @@ const getSingleContent = async (contentId, accessToken, isInstagram = false, use
 
     let insightsData = [];
     try {
-      const metric = 'post_impressions,post_impressions_unique,post_engaged_users,post_activity_by_action_type';
+      const metric = 'post_engaged_users';
       const insResult = await fetchGraphApi(`/${post.id}/insights`, accessToken, { metric }, userId, false);
       insightsData = insResult.data || [];
     } catch (err) {
       if (err.statusCode === 429 || err.metaCode === 4) throw err;
-      try {
-        const fallbackMetric = 'post_impressions,post_impressions_unique,post_engaged_users';
-        const insResult = await fetchGraphApi(`/${post.id}/insights`, accessToken, { metric: fallbackMetric }, userId, false);
-        insightsData = insResult.data || [];
-      } catch (fallbackErr) {
-        if (fallbackErr.statusCode === 429 || fallbackErr.metaCode === 4) throw fallbackErr;
-      }
+      insightsData = [];
     }
 
     return {
@@ -550,7 +535,7 @@ const getSingleContent = async (contentId, accessToken, isInstagram = false, use
       createdTime: post.created_time,
       fullPicture: post.full_picture || null,
       permalinkUrl: post.permalink_url || null,
-      shareCount: post.shares ? post.shares.count : 0,
+      shareCount: post.shares && typeof post.shares.count === 'number' ? post.shares.count : null,
       from: post.from || null,
       insightsData,
     };
@@ -563,7 +548,7 @@ const getSingleContent = async (contentId, accessToken, isInstagram = false, use
 const getFacebookPageInsights = async (pageId, accessToken, timeParams = {}, userId = null) => {
   const pageToken = await getPageAccessToken(pageId, accessToken, userId);
   const params = {
-    metric: 'page_post_engagements,page_daily_follows',
+    metric: 'page_follows,page_views_total,page_post_engagements,page_total_actions',
     period: 'day',
   };
 
@@ -579,18 +564,44 @@ const getFacebookPageInsights = async (pageId, accessToken, timeParams = {}, use
   const response = await fetchGraphApi(`/${pageId}/insights`, pageToken, params, userId, false);
   const metricsData = Array.isArray(response.data) ? response.data : [];
 
-  const normalizedMetrics = metricsData.map((item) => ({
-    name: item.name,
-    period: item.period,
-    title: item.title || item.name,
-    description: item.description || null,
-    values: Array.isArray(item.values)
-      ? item.values.map((v) => ({
-          value: v.value,
-          endTime: v.end_time,
-        }))
-      : [],
-  }));
+  const requestedMetrics = params.metric.split(',').map((m) => m.trim()).filter(Boolean);
+
+  const returnedMetricsMap = new Map();
+  metricsData.forEach((item) => {
+    if (item && item.name) {
+      returnedMetricsMap.set(item.name, {
+        name: item.name,
+        period: item.period || params.period || 'day',
+        title: item.title || item.name,
+        description: item.description || null,
+        values: Array.isArray(item.values)
+          ? item.values.map((v) => ({
+              value: v.value,
+              endTime: v.end_time,
+            }))
+          : [],
+      });
+    }
+  });
+
+  const normalizedMetrics = requestedMetrics.map((metricName) => {
+    if (returnedMetricsMap.has(metricName)) {
+      return returnedMetricsMap.get(metricName);
+    }
+    return {
+      name: metricName,
+      period: params.period || 'day',
+      title: metricName,
+      description: null,
+      values: [],
+    };
+  });
+
+  metricsData.forEach((item) => {
+    if (item && item.name && !requestedMetrics.includes(item.name)) {
+      normalizedMetrics.push(returnedMetricsMap.get(item.name));
+    }
+  });
 
   return {
     pageId,
@@ -725,18 +736,44 @@ const getInstagramInsights = async (instagramAccountId, accessToken, timeParams 
   const response = await fetchGraphApi(`/${instagramAccountId}/insights`, accessToken, params, userId);
   const metricsData = Array.isArray(response.data) ? response.data : [];
 
-  const normalizedMetrics = metricsData.map((item) => ({
-    name: item.name,
-    period: item.period,
-    title: item.title || item.name,
-    description: item.description || null,
-    values: Array.isArray(item.values)
-      ? item.values.map((v) => ({
-          value: v.value,
-          endTime: v.end_time,
-        }))
-      : [],
-  }));
+  const requestedMetrics = params.metric.split(',').map((m) => m.trim()).filter(Boolean);
+
+  const returnedMetricsMap = new Map();
+  metricsData.forEach((item) => {
+    if (item && item.name) {
+      returnedMetricsMap.set(item.name, {
+        name: item.name,
+        period: item.period || params.period || 'day',
+        title: item.title || item.name,
+        description: item.description || null,
+        values: Array.isArray(item.values)
+          ? item.values.map((v) => ({
+              value: v.value,
+              endTime: v.end_time,
+            }))
+          : [],
+      });
+    }
+  });
+
+  const normalizedMetrics = requestedMetrics.map((metricName) => {
+    if (returnedMetricsMap.has(metricName)) {
+      return returnedMetricsMap.get(metricName);
+    }
+    return {
+      name: metricName,
+      period: params.period || 'day',
+      title: metricName,
+      description: null,
+      values: [],
+    };
+  });
+
+  metricsData.forEach((item) => {
+    if (item && item.name && !requestedMetrics.includes(item.name)) {
+      normalizedMetrics.push(returnedMetricsMap.get(item.name));
+    }
+  });
 
   return {
     instagramAccountId,

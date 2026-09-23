@@ -51,19 +51,43 @@ const evaluateCapabilities = (integration, user, tenant, assets = {}) => {
   const igAccounts = assets.instagramAccounts || [];
   const adAccounts = assets.adAccounts || [];
 
-  // 1. Social (Facebook Pages) Capability
+  // 1. Social (Facebook Page Discovery & Access) Capability
   let social = { available: false, code: 'NOT_CONNECTED', reason: 'Meta account is not connected' };
   if (!requirements.requireSocial) {
     social = { available: false, code: 'REQUIREMENT_DISABLED', reason: 'Social capability is disabled for user plan/tier' };
   } else if (!isConnected) {
     social = { available: false, code: 'NOT_CONNECTED', reason: 'Meta account is not connected or authorization has expired' };
-  } else if (!grantedScopes.has('pages_show_list') && !grantedScopes.has('pages_read_engagement')) {
-    social = { available: false, code: 'PERMISSION_DENIED', reason: 'Required Meta permissions (pages_show_list, pages_read_engagement) not granted' };
+  } else if (!grantedScopes.has('pages_show_list')) {
+    social = { available: false, code: 'PERMISSION_DENIED', reason: 'Required Meta permission (pages_show_list) not granted' };
   } else if (pages.length === 0) {
     social = { available: false, code: 'ASSET_NOT_FOUND', reason: 'No accessible Facebook Pages discovered' };
   } else {
     social = { available: true, code: 'AVAILABLE', reason: null };
   }
+
+  // 1b. Facebook Page Insights Capability (Strict: Permissions ∩ Asset ∩ Page Access/Task)
+  const targetPage = pages.length > 0 ? pages[0] : null;
+  const pageHasAnalyzeTask = targetPage && Array.isArray(targetPage.tasks) ? targetPage.tasks.includes('ANALYZE') : false;
+  const pageHasToken = Boolean(targetPage?.pageToken);
+
+  let pageInsights = { available: false, code: 'NOT_CONNECTED', reason: 'Meta account is not connected' };
+  if (!requirements.requireSocial) {
+    pageInsights = { available: false, code: 'REQUIREMENT_DISABLED', reason: 'Social capability is disabled for user plan/tier' };
+  } else if (!isConnected) {
+    pageInsights = { available: false, code: 'NOT_CONNECTED', reason: 'Meta account is not connected or authorization has expired' };
+  } else if (!grantedScopes.has('read_insights')) {
+    pageInsights = { available: false, code: 'PERMISSION_DENIED', reason: 'Required Meta permission (read_insights) not granted' };
+  } else if (!grantedScopes.has('pages_read_engagement')) {
+    pageInsights = { available: false, code: 'PERMISSION_DENIED', reason: 'Required Meta permission (pages_read_engagement) not granted' };
+  } else if (pages.length === 0) {
+    pageInsights = { available: false, code: 'ASSET_NOT_FOUND', reason: 'No accessible Facebook Pages discovered' };
+  } else if (!pageHasAnalyzeTask && !pageHasToken) {
+    pageInsights = { available: false, code: 'INSUFFICIENT_PAGE_PERMISSIONS', reason: 'Discovered Facebook Page lacks ANALYZE task or Page Access Token' };
+  } else {
+    pageInsights = { available: true, code: 'AVAILABLE', reason: null };
+  }
+
+  social.pageInsights = pageInsights;
 
   // 2. Instagram Capability
   let instagram = { available: false, code: 'NOT_CONNECTED', reason: 'Meta account is not connected' };
@@ -95,6 +119,7 @@ const evaluateCapabilities = (integration, user, tenant, assets = {}) => {
 
   return {
     social,
+    pageInsights,
     instagram,
     ads,
   };
@@ -291,14 +316,24 @@ const getOverview = async (userId, timeParams = {}) => {
   if (capabilities.social.available && targetPage) {
     try {
       const pageDetails = await metaService.getFacebookPageDetails(targetPage.pageId, integration.accessToken, userId);
-      const pageInsights = await metaService.getFacebookPageInsights(targetPage.pageId, integration.accessToken, timeParams, userId);
+      
+      let pageInsightsMetrics = [];
+      if (capabilities.pageInsights?.available) {
+        try {
+          const pageInsights = await metaService.getFacebookPageInsights(targetPage.pageId, integration.accessToken, timeParams, userId);
+          pageInsightsMetrics = pageInsights.metrics || [];
+        } catch (err) {
+          const safeMsg = err.message ? err.message.replace(/access_token=[^&]+/gi, '[REDACTED]') : 'Unknown error';
+          console.log(`[OVERVIEW] Page insights error for pageId=${targetPage.pageId}: ${safeMsg}`);
+        }
+      }
 
       socialOverview = {
         pageId: targetPage.pageId,
         pageName: pageDetails.name,
         followersCount: pageDetails.followersCount,
         fanCount: pageDetails.fanCount,
-        metrics: pageInsights.metrics || [],
+        metrics: pageInsightsMetrics,
       };
     } catch (err) {
       const safeMsg = err.message ? err.message.replace(/access_token=[^&]+/gi, '[REDACTED]') : 'Unknown error';
@@ -380,12 +415,14 @@ const getSocialInsights = async (userId, queryParams = {}) => {
 
     if (details) {
       let insightsMetrics = [];
-      try {
-        const insights = await metaService.getFacebookPageInsights(targetPage.pageId, integration.accessToken, queryParams, userId);
-        insightsMetrics = insights.metrics || [];
-      } catch (err) {
-        const safeMsg = err.message ? err.message.replace(/access_token=[^&]+/gi, '[REDACTED]') : 'Unknown error';
-        console.log(`[SOCIAL_INSIGHTS] Page insights error for pageId=${targetPage.pageId}: ${safeMsg}`);
+      if (capabilities.pageInsights?.available) {
+        try {
+          const insights = await metaService.getFacebookPageInsights(targetPage.pageId, integration.accessToken, queryParams, userId);
+          insightsMetrics = insights.metrics || [];
+        } catch (err) {
+          const safeMsg = err.message ? err.message.replace(/access_token=[^&]+/gi, '[REDACTED]') : 'Unknown error';
+          console.log(`[SOCIAL_INSIGHTS] Page insights error for pageId=${targetPage.pageId}: ${safeMsg}`);
+        }
       }
 
       pageData = {
@@ -504,43 +541,18 @@ const fetchWithDateBoundary = async (fetchFn, id, accessToken, queryParams, user
 const parseFacebookPostMetrics = (p) => {
   const getInsight = (name) => {
     const metric = p.insightsData?.find((i) => i.name === name);
-    return metric && metric.values && metric.values.length > 0 ? metric.values[0].value : null;
+    if (!metric || !Array.isArray(metric.values) || metric.values.length === 0) return null;
+    const val = metric.values[0].value;
+    return typeof val === 'number' ? val : null;
   };
 
-  const activityMetric = p.insightsData?.find((i) => i.name === 'post_activity_by_action_type');
-  let reactionCount = null;
-  let commentCount = null;
-  let shareCount = p.shareCount !== undefined ? p.shareCount : 0;
-
-  if (activityMetric && activityMetric.values && activityMetric.values.length > 0) {
-    const activityObj = activityMetric.values[0].value;
-    if (activityObj && typeof activityObj === 'object') {
-      if (typeof activityObj.comment === 'number') {
-        commentCount = activityObj.comment;
-      }
-
-      let sumReactions = 0;
-      let hasReactionKey = false;
-      const reactionKeys = ['like', 'love', 'wow', 'haha', 'sorry', 'anger', 'reaction'];
-      Object.keys(activityObj).forEach((key) => {
-        if (reactionKeys.includes(key.toLowerCase()) && typeof activityObj[key] === 'number') {
-          sumReactions += activityObj[key];
-          hasReactionKey = true;
-        }
-      });
-      if (hasReactionKey) {
-        reactionCount = sumReactions;
-      }
-
-      if (typeof activityObj.share === 'number' && !shareCount) {
-        shareCount = activityObj.share;
-      }
-    }
-  }
+  const shareCount = typeof p.shareCount === 'number' ? p.shareCount : null;
+  const reactionCount = typeof p.reactionCount === 'number' ? p.reactionCount : null;
+  const commentCount = typeof p.commentCount === 'number' ? p.commentCount : null;
 
   let fbPostInteractions = null;
-  if (reactionCount !== null || commentCount !== null || shareCount !== null) {
-    fbPostInteractions = (reactionCount || 0) + (commentCount || 0) + (shareCount || 0);
+  if (typeof reactionCount === 'number' && typeof commentCount === 'number' && typeof shareCount === 'number') {
+    fbPostInteractions = reactionCount + commentCount + shareCount;
   }
 
   return {
@@ -548,8 +560,8 @@ const parseFacebookPostMetrics = (p) => {
     reactionCount,
     commentCount,
     fbPostInteractions,
-    impressions: getInsight('post_impressions'),
-    reach: getInsight('post_impressions_unique'),
+    impressions: null,
+    reach: null,
     engagement: getInsight('post_engaged_users'),
   };
 };
@@ -1118,6 +1130,7 @@ module.exports = {
   deriveClientRequirements,
   getCurrencyDivisor,
   evaluateCapabilities,
+  parseFacebookPostMetrics,
   getOverview,
   getSocialInsights,
   getContentInsights,
