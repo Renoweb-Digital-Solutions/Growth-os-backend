@@ -12,6 +12,7 @@ const { errorHandler } = require('./middleware/errorMiddleware');
 const authRoutes = require('./routes/auth');
 const onboardingRoutes = require('./routes/onboarding');
 const userRoutes = require('./routes/userRoutes');
+const metaRoutes = require('./routes/metaRoutes');
 
 // Ensure critical environment variables exist
 if (!process.env.MONGODB_URI || !process.env.JWT_SECRET) {
@@ -43,6 +44,13 @@ app.use('/api', limiter);
 app.use('/api/auth', authRoutes);
 app.use('/api/onboarding', onboardingRoutes);
 app.use('/api/users', userRoutes);
+
+app.use('/api/meta', (req, res, next) => {
+  const reqId = Math.random().toString(36).substring(2, 9);
+  req.metaReqId = reqId;
+  console.log(`[API] requestId=${reqId} route=${req.method} ${req.originalUrl} timestamp=${new Date().toISOString()}`);
+  next();
+}, metaRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => {
