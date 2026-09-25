@@ -1,0 +1,46 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: self-hosted
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Deploy and Restart Backend
+        run: |
+          set -Eeuo pipefail
+
+          # Navigate to the backend directory
+          cd /home/growmentum/Growth-os-backend
+
+          PREV_COMMIT=$(git rev-parse HEAD)
+          echo "Starting deployment. Previous commit is $PREV_COMMIT"
+
+          rollback() {
+            echo "Deployment failed! Rolling back to previous commit ($PREV_COMMIT)..."
+            set +e
+            git reset --hard "$PREV_COMMIT"
+            npm ci
+            pm2 restart all
+            echo "Rollback finished. Marking pipeline as failed."
+            exit 1
+          }
+
+          trap rollback ERR
+
+          echo "Pulling latest code for ${GITHUB_REF_NAME}..."
+          git fetch origin main
+          git reset --hard "origin/main"
+
+          echo "Installing dependencies..."
+          npm ci
+
+          echo "Restarting application..."
+          pm2 restart all
