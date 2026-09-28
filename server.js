@@ -13,6 +13,8 @@ const authRoutes = require('./routes/auth');
 const onboardingRoutes = require('./routes/onboarding');
 const userRoutes = require('./routes/userRoutes');
 const metaRoutes = require('./routes/metaRoutes');
+const googleRoutes = require('./routes/googleRoutes');
+
 
 // Ensure critical environment variables exist
 if (!process.env.MONGODB_URI || !process.env.JWT_SECRET) {
@@ -51,6 +53,9 @@ app.use('/api/meta', (req, res, next) => {
   console.log(`[API] requestId=${reqId} route=${req.method} ${req.originalUrl} timestamp=${new Date().toISOString()}`);
   next();
 }, metaRoutes);
+
+app.use('/api/google', googleRoutes);
+
 
 // Health check
 app.get('/api/health', (req, res) => {

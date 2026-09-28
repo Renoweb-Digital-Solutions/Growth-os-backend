@@ -128,3 +128,6 @@ dist
 .vscode/
 *.swp
 *.swo
+
+
+docs/
