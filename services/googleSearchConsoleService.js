@@ -312,6 +312,10 @@ const querySearchAnalytics = async (accessToken, siteUrl, queryParams = {}) => {
     requestBody.aggregationType = queryParams.aggregationType;
   }
 
+  if (queryParams.dataState) {
+    requestBody.dataState = queryParams.dataState;
+  }
+
   const data = await fetchGoogleApi(url, accessToken, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -331,6 +335,7 @@ const querySearchAnalytics = async (accessToken, siteUrl, queryParams = {}) => {
   return {
     rows: normalizedRows,
     responseAggregationType: data.responseAggregationType || null,
+    metadata: data.metadata || null,
   };
 };
 
