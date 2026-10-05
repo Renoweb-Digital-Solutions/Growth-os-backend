@@ -39,63 +39,88 @@ const evaluateCapabilities = (integration, properties = []) => {
 };
 
 /**
- * Validates and normalizes YYYY-MM-DD date range inputs, supporting predefined range presets (7d, 28d, 3m, 6m, 12m, 16m)
+ * Validates and normalizes YYYY-MM-DD date range inputs, supporting predefined range presets (24h, 7d, 28d, 3m, 6m, 12m, 16m)
  * matching native Google Search Console date boundary rules.
  */
 const validateAndNormalizeDateRange = (startDateInput, endDateInput, rangePresetInput) => {
   const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
+  const nowUtc = new Date();
 
   let endDateStr;
-  if (endDateInput && dateRegex.test(endDateInput)) {
-    endDateStr = endDateInput;
-  } else {
-    // Default endDate to 3 days ago in UTC due to Google Search Console data latency
-    const nowUtc = new Date();
-    const defaultEndUtc = new Date(Date.UTC(nowUtc.getUTCFullYear(), nowUtc.getUTCMonth(), nowUtc.getUTCDate() - 3));
-    endDateStr = formatUtcDate(defaultEndUtc);
-  }
-
-  const endUtc = parseUtcDate(endDateStr);
   let startDateStr;
 
-  if (rangePresetInput) {
-    const preset = String(rangePresetInput).toLowerCase().trim();
-    switch (preset) {
+  const rawPreset = rangePresetInput ? String(rangePresetInput).toLowerCase().trim().replace(/[\s\-_]/g, '') : null;
+
+  if (rawPreset) {
+    switch (rawPreset) {
+      case '24h':
+      case '24hours':
+      case '1d':
+      case '1day': {
+        endDateStr = formatUtcDate(nowUtc);
+        startDateStr = formatUtcDate(new Date(nowUtc.getTime() - 24 * 60 * 60 * 1000));
+        break;
+      }
       case '7d':
-      case '7_days':
-        startDateStr = formatUtcDate(new Date(endUtc.getTime() - 6 * 24 * 60 * 60 * 1000));
+      case '7days': {
+        const defaultEnd = endDateInput && dateRegex.test(endDateInput) ? parseUtcDate(endDateInput) : new Date(Date.UTC(nowUtc.getUTCFullYear(), nowUtc.getUTCMonth(), nowUtc.getUTCDate() - 3));
+        endDateStr = formatUtcDate(defaultEnd);
+        startDateStr = formatUtcDate(new Date(defaultEnd.getTime() - 6 * 24 * 60 * 60 * 1000));
         break;
+      }
       case '28d':
-      case '28_days':
-        startDateStr = formatUtcDate(new Date(endUtc.getTime() - 27 * 24 * 60 * 60 * 1000));
+      case '28days': {
+        const defaultEnd = endDateInput && dateRegex.test(endDateInput) ? parseUtcDate(endDateInput) : new Date(Date.UTC(nowUtc.getUTCFullYear(), nowUtc.getUTCMonth(), nowUtc.getUTCDate() - 3));
+        endDateStr = formatUtcDate(defaultEnd);
+        startDateStr = formatUtcDate(new Date(defaultEnd.getTime() - 27 * 24 * 60 * 60 * 1000));
         break;
+      }
       case '3m':
-      case '3_months':
-        startDateStr = formatUtcDate(new Date(Date.UTC(endUtc.getUTCFullYear(), endUtc.getUTCMonth() - 3, endUtc.getUTCDate() + 1)));
+      case '3months': {
+        const defaultEnd = endDateInput && dateRegex.test(endDateInput) ? parseUtcDate(endDateInput) : new Date(Date.UTC(nowUtc.getUTCFullYear(), nowUtc.getUTCMonth(), nowUtc.getUTCDate() - 3));
+        endDateStr = formatUtcDate(defaultEnd);
+        startDateStr = formatUtcDate(new Date(Date.UTC(defaultEnd.getUTCFullYear(), defaultEnd.getUTCMonth() - 3, defaultEnd.getUTCDate() + 1)));
         break;
+      }
       case '6m':
-      case '6_months':
-        startDateStr = formatUtcDate(new Date(Date.UTC(endUtc.getUTCFullYear(), endUtc.getUTCMonth() - 6, endUtc.getUTCDate() + 1)));
+      case '6months': {
+        const defaultEnd = endDateInput && dateRegex.test(endDateInput) ? parseUtcDate(endDateInput) : new Date(Date.UTC(nowUtc.getUTCFullYear(), nowUtc.getUTCMonth(), nowUtc.getUTCDate() - 3));
+        endDateStr = formatUtcDate(defaultEnd);
+        startDateStr = formatUtcDate(new Date(Date.UTC(defaultEnd.getUTCFullYear(), defaultEnd.getUTCMonth() - 6, defaultEnd.getUTCDate() + 1)));
         break;
+      }
       case '12m':
-      case '12_months':
-        startDateStr = formatUtcDate(new Date(Date.UTC(endUtc.getUTCFullYear(), endUtc.getUTCMonth() - 12, endUtc.getUTCDate() + 1)));
+      case '12months': {
+        const defaultEnd = endDateInput && dateRegex.test(endDateInput) ? parseUtcDate(endDateInput) : new Date(Date.UTC(nowUtc.getUTCFullYear(), nowUtc.getUTCMonth(), nowUtc.getUTCDate() - 3));
+        endDateStr = formatUtcDate(defaultEnd);
+        startDateStr = formatUtcDate(new Date(Date.UTC(defaultEnd.getUTCFullYear(), defaultEnd.getUTCMonth() - 12, defaultEnd.getUTCDate() + 1)));
         break;
+      }
       case '16m':
-      case '16_months':
-        startDateStr = formatUtcDate(new Date(Date.UTC(endUtc.getUTCFullYear(), endUtc.getUTCMonth() - 16, endUtc.getUTCDate() + 1)));
+      case '16months': {
+        const defaultEnd = endDateInput && dateRegex.test(endDateInput) ? parseUtcDate(endDateInput) : new Date(Date.UTC(nowUtc.getUTCFullYear(), nowUtc.getUTCMonth(), nowUtc.getUTCDate() - 3));
+        endDateStr = formatUtcDate(defaultEnd);
+        startDateStr = formatUtcDate(new Date(Date.UTC(defaultEnd.getUTCFullYear(), defaultEnd.getUTCMonth() - 16, defaultEnd.getUTCDate() + 1)));
         break;
-      default:
-        startDateStr = formatUtcDate(new Date(endUtc.getTime() - 27 * 24 * 60 * 60 * 1000));
+      }
+      default: {
+        const defaultEnd = endDateInput && dateRegex.test(endDateInput) ? parseUtcDate(endDateInput) : new Date(Date.UTC(nowUtc.getUTCFullYear(), nowUtc.getUTCMonth(), nowUtc.getUTCDate() - 3));
+        endDateStr = formatUtcDate(defaultEnd);
+        startDateStr = formatUtcDate(new Date(defaultEnd.getTime() - 27 * 24 * 60 * 60 * 1000));
+        break;
+      }
     }
   } else if (startDateInput && dateRegex.test(startDateInput)) {
     startDateStr = startDateInput;
+    endDateStr = endDateInput && dateRegex.test(endDateInput) ? endDateInput : formatUtcDate(new Date(Date.UTC(nowUtc.getUTCFullYear(), nowUtc.getUTCMonth(), nowUtc.getUTCDate() - 3)));
   } else {
-    // Default startDate to 28 days before endDate (standard 28-day window)
-    startDateStr = formatUtcDate(new Date(endUtc.getTime() - 27 * 24 * 60 * 60 * 1000));
+    const defaultEnd = endDateInput && dateRegex.test(endDateInput) ? parseUtcDate(endDateInput) : new Date(Date.UTC(nowUtc.getUTCFullYear(), nowUtc.getUTCMonth(), nowUtc.getUTCDate() - 3));
+    endDateStr = formatUtcDate(defaultEnd);
+    startDateStr = formatUtcDate(new Date(defaultEnd.getTime() - 27 * 24 * 60 * 60 * 1000));
   }
 
   const startUtc = parseUtcDate(startDateStr);
+  const endUtc = parseUtcDate(endDateStr);
 
   if (isNaN(startUtc.getTime()) || isNaN(endUtc.getTime())) {
     const err = new Error('Invalid date format: startDate and endDate must be valid dates in YYYY-MM-DD format');
@@ -196,6 +221,64 @@ const verifyPropertyAccess = async (userId, targetSiteUrl) => {
  * Executive summary across Search Console metrics (Clicks, Impressions, CTR, Position) with date trends and period comparisons
  */
 const getOverview = async (userId, queryParams = {}) => {
+  // Reason: Search Console daily data has a 2-3 day data lag. Standard daily queries for the 24H window fail or return empty rows.
+  // How: When a 24H preset is requested, delegate to getRolling24HourPerformanceCompare which uses dataState: 'hourly_all' and dimensions: ['hour'].
+  const presetKey = String(queryParams.rangePreset || queryParams.range || '').toLowerCase().trim().replace(/[\s\-_]/g, '');
+  const is24hPreset = ['24h', '24hours', '1d', '1day'].includes(presetKey);
+
+  if (is24hPreset) {
+    const rolling24hResult = await getRolling24HourPerformanceCompare(userId, queryParams);
+    const currData = rolling24hResult.data.current;
+    const compData = rolling24hResult.data.comparison;
+    const currentSummary = currData ? currData.summary : { clicks: 0, impressions: 0, ctr: 0, position: 0 };
+    const previousSummary = compData ? compData.summary : { clicks: 0, impressions: 0, ctr: 0, position: 0 };
+
+    const calcPctChange = (current, previous) => {
+      if (previous === 0) return current > 0 ? 100 : 0;
+      return Number((((current - previous) / previous) * 100).toFixed(2));
+    };
+
+    const comparison = {
+      clicksChangePct: calcPctChange(currentSummary.clicks, previousSummary.clicks),
+      impressionsChangePct: calcPctChange(currentSummary.impressions, previousSummary.impressions),
+      ctrChangeDiff: Number((currentSummary.ctr - previousSummary.ctr).toFixed(4)),
+      positionChangeDiff: Number((currentSummary.position - previousSummary.position).toFixed(2)),
+    };
+
+    const trendSeries = (currData.rows || []).map((row) => ({
+      date: row.timestamp || `${row.date} ${String(row.hour).padStart(2, '0')}:00`,
+      clicks: row.clicks,
+      impressions: row.impressions,
+      ctr: row.ctr,
+      position: row.position,
+    }));
+
+    return {
+      data: {
+        property: rolling24hResult.data.property,
+        clicks: currentSummary.clicks,
+        impressions: currentSummary.impressions,
+        ctr: currentSummary.ctr,
+        position: currentSummary.position,
+        summary: currentSummary,
+        previousPeriodSummary: previousSummary,
+        comparison: comparison,
+        trend: trendSeries,
+      },
+      meta: {
+        source: 'google_search_console',
+        dateRange: {
+          preset: '24H',
+          startDate: currData.startDate,
+          endDate: currData.endDate,
+          previousStartDate: compData.startDate,
+          previousEndDate: compData.endDate,
+        },
+        capabilities: rolling24hResult.meta.capabilities,
+      },
+    };
+  }
+
   const integration = await GoogleIntegration.findOne({ userId });
   const property = await verifyPropertyAccess(userId, queryParams.siteUrl);
   const accessToken = await googleService.getValidAccessToken(userId);
@@ -223,7 +306,7 @@ const getOverview = async (userId, queryParams = {}) => {
         ctr: summaryRow.ctr,
         position: summaryRow.position,
       }
-    : null;
+    : { clicks: 0, impressions: 0, ctr: 0, position: 0 };
 
   // 2. Query Current Period Trend Series (Date Dimension)
   const trendResult = await googleService.querySearchAnalytics(accessToken, property.siteUrl, {
@@ -266,7 +349,7 @@ const getOverview = async (userId, queryParams = {}) => {
           clicksChangePct: calcPctChange(currentSummary.clicks, previousSummary.clicks),
           impressionsChangePct: calcPctChange(currentSummary.impressions, previousSummary.impressions),
           ctrChangeDiff: Number((currentSummary.ctr - previousSummary.ctr).toFixed(4)),
-          positionChangeDiff: Number((currentSummary.position - previousSummary.position).toFixed(2)), // Note: Negative position difference indicates ranking improvement
+          positionChangeDiff: Number((currentSummary.position - previousSummary.position).toFixed(2)),
         };
       }
     }
@@ -294,10 +377,10 @@ const getOverview = async (userId, queryParams = {}) => {
         permissionLevel: property.permissionLevel,
         propertyType: property.propertyType,
       },
-      clicks: currentSummary ? currentSummary.clicks : null,
-      impressions: currentSummary ? currentSummary.impressions : null,
-      ctr: currentSummary ? currentSummary.ctr : null,
-      position: currentSummary ? currentSummary.position : null,
+      clicks: currentSummary ? currentSummary.clicks : 0,
+      impressions: currentSummary ? currentSummary.impressions : 0,
+      ctr: currentSummary ? currentSummary.ctr : 0,
+      position: currentSummary ? currentSummary.position : 0,
       summary: currentSummary,
       previousPeriodSummary: previousSummary,
       comparison: comparison,
@@ -323,6 +406,9 @@ const getOverview = async (userId, queryParams = {}) => {
 const getPerformance = async (userId, queryParams = {}) => {
   const property = await verifyPropertyAccess(userId, queryParams.siteUrl);
   const accessToken = await googleService.getValidAccessToken(userId);
+
+  const presetKey = String(queryParams.rangePreset || queryParams.range || '').toLowerCase().trim().replace(/[\s\-_]/g, '');
+  const is24hPreset = ['24h', '24hours', '1d', '1day'].includes(presetKey);
 
   const { startDateStr, endDateStr } = validateAndNormalizeDateRange(
     queryParams.startDate,
@@ -350,6 +436,7 @@ const getPerformance = async (userId, queryParams = {}) => {
     endDate: endDateStr,
     dimensions: validDimensions,
     rowLimit,
+    ...(is24hPreset ? { dataState: 'hourly_all' } : {}),
   });
 
   const rows = result.rows || [];
