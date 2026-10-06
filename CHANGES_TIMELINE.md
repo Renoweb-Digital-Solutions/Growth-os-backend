@@ -1,5 +1,40 @@
 # Backend Changes Timeline
 
+## [2026-10-05] Google Analytics 4 Performance Trend Granularity Rule Update (30-Day Threshold)
+- **Overview**: Updated trend granularity selection rule in `resolveTrendGranularity()` to strictly enforce daily granularity for effective date ranges $\le 30$ calendar days and weekly granularity for non-year effective date ranges $> 30$ calendar days.
+- **Data Flow**:
+  - `24H`: `hour` (`dateHour` dimension).
+  - Effective resolved duration $\le 30$ calendar days (`7D`, `28D`, `30D`, `Today`, `Yesterday`, `This week`, `Last week`, `Last 30 days`, `This month` $\le 30$ days, `Last month` with 30 days, `QTD` $\le 30$ days, custom ranges $\le 30$ days): `day` (`date` dimension).
+  - Effective resolved duration $> 30$ calendar days (`Last month` with 31 days, `QTD` $> 30$ days, `90D`, `120D`, custom ranges $> 30$ days): `week` (`yearWeek` dimension).
+  - Year-scale ranges (`This year`, `Last calendar year`): `month` (`yearMonth` dimension).
+- **Technical Details**:
+  - Preserved working 90D weekly Sunday–Saturday implementation, 13-week shift alignment, tooltips, and ratio metric direct querying.
+  - Calculated duration dynamically from resolved `startDateStr` and `endDateStr` rather than preset names.
+
+## [2026-10-05] Google Analytics 4 Quarter-to-Date (QTD) Trend Date Range Resolution & Comparison Fix
+- **Overview**: Resolved date range end date resolution and comparison period alignment for Quarter-to-Date (QTD), This Week, This Month, and This Year performance trends in `GET /api/google/analytics/insights/overview`.
+- **Data Flow**:
+  - `GET /api/google/analytics/insights/overview`: Updated preset date normalization for relative range presets (`quartertodate`, `thisweek`, `thismonth`, `thisyear`) to respect caller-supplied `endDateInput` or default to `yesterdayStr` (if `yesterdayStr >= startDateStr`), aligning with standard GA4 reporting surface data processing semantics.
+  - Prevents rendering points beyond processed reporting dates while generating exact matching preceding duration daily buckets for comparison period ($N = N$).
+  - Documented GA4 reporting surface nuances and Data API schema behaviors in `README.md`.
+  - Retained working 90D weekly trend granularity, Sunday–Saturday week boundaries, and direct ratio metric GA4 Data API query behavior without regression.
+
+## [2026-10-05] Google Analytics 4 Overview Performance Trend Granularity & Comparison Alignment Fix
+- **Overview**: Implemented GA4-style temporal granularity (`hour`, `day`, `week`, `month`) and aligned comparison period buckets for the GA4 Overview Performance Trend endpoint (`GET /api/google/analytics/insights/overview`).
+- **Data Flow**:
+  - `GET /api/google/analytics/insights/overview`: Now evaluates `preset` and resolved date range duration to select deterministic trend granularity (`resolveTrendGranularity`).
+  - `24H` resolves to `hour` (`dateHour` dimension).
+  - Short daily ranges (7D, 28D, 30D, Today, Yesterday, This week, Last week, Last 7/28/30 days, This/Last month, short custom ranges <= 60 days) resolve to `day` (`date` dimension).
+  - ~90D ranges (90D, 3M, Last 90 days, custom ranges 61–180 days) resolve to `week` (`yearWeek` dimension, starting on Sunday and ending on Saturday).
+  - Year-scale ranges (This year, Last calendar year, custom ranges > 180 days) resolve to `month` (`yearMonth` dimension).
+  - Quarter to date (QTD) dynamically resolves granularity based on its actual resolved duration in days.
+- **Technical Details**:
+  - Updated `services/googleAnalyticsDataService.js` with `resolveTrendGranularity()`, `getGA4YearWeek()`, `generateTrendBuckets()`, and `formatTrendPointsWithBuckets()`.
+  - Sunday-starting week boundaries (Sunday to Saturday) are calculated for weekly buckets and expanded to align with GA4 calendar week reporting semantics.
+  - Aligned comparison periods: Current and previous period trend series maintain symmetrical bucket structures and counts ($N$, $W$, or $M$).
+  - Direct GA4 Data API metric retrieval: Trend metrics (including ratio metrics like `engagementRate`, `bounceRate`, `screenPageViewsPerUser`, and `averageEngagementTimePerActiveUser`) are queried directly from GA4 Data API at the trend dimension to preserve accurate GA4 metric semantics without artificial client-side averaging.
+  - Preserved backward compatibility: Preserved all existing KPI card calculations, response structures, property timezone resolution, OAuth, and acquisition endpoints. No frontend code modified.
+
 ## [2026-09-13] Phase 3 — GROmentum Insights & Data Delivery Implementation
 - **Overview**: Implemented Phase 3 capability-aware, normalized, dashboard-ready Gromentum APIs built on top of Phase 1 OAuth and Phase 2 Graph API retrieval foundations.
 - **Data Flow**:

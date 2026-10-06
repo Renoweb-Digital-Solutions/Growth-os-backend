@@ -81,7 +81,9 @@ const callback = asyncHandler(async (req, res) => {
     tokenExpiresAt = new Date(Date.now() + tokenData.expiresIn * 1000);
   }
 
-  const grantedScopes = tokenData.scope ? tokenData.scope.split(' ') : ['https://www.googleapis.com/auth/webmasters.readonly'];
+  const grantedScopes = tokenData.scope
+    ? tokenData.scope.split(' ')
+    : ['https://www.googleapis.com/auth/webmasters.readonly', 'https://www.googleapis.com/auth/analytics.readonly'];
 
   // Preserve existing refresh token if Google did not return a new one on re-consent
   const existingIntegration = await GoogleIntegration.findOne({ userId: stateRecord.userId });

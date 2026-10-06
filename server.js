@@ -14,6 +14,8 @@ const onboardingRoutes = require('./routes/onboarding');
 const userRoutes = require('./routes/userRoutes');
 const metaRoutes = require('./routes/metaRoutes');
 const googleRoutes = require('./routes/googleRoutes');
+const googleAnalyticsRoutes = require('./routes/googleAnalyticsRoutes');
+
 
 
 // Ensure critical environment variables exist
@@ -35,10 +37,19 @@ app.use(express.json());
 app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
 
 // Rate Limiting
-// Reason: Protects the API against brute-force attacks and DDoS by limiting requests per IP.
+// Reason: Protects the API against brute-force attacks and flood DDoS while allowing rich dashboard interaction.
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // Limit each IP to 100 requests per windowMs
+  max: 1000, // Limit each IP to 1000 requests per windowMs for standard web app usage
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    success: false,
+    error: {
+      code: 'RATE_LIMIT_EXCEEDED',
+      message: 'Too many requests, please try again later.',
+    },
+  },
 });
 app.use('/api', limiter);
 
@@ -54,6 +65,7 @@ app.use('/api/meta', (req, res, next) => {
   next();
 }, metaRoutes);
 
+app.use('/api/google/analytics', googleAnalyticsRoutes);
 app.use('/api/google', googleRoutes);
 
 

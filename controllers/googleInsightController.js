@@ -25,12 +25,13 @@ const getProperties = asyncHandler(async (req, res) => {
 // @route   GET /api/google/insights/overview
 // @access  Private (Protected by Gromentum JWT)
 const getOverview = asyncHandler(async (req, res) => {
-  const { siteUrl, startDate, endDate } = req.query;
+  const { siteUrl, startDate, endDate, rangePreset, range } = req.query;
 
   const result = await googleInsightService.getOverview(req.user._id, {
     siteUrl,
     startDate,
     endDate,
+    rangePreset: rangePreset || range,
   });
 
   res.json({
@@ -44,12 +45,13 @@ const getOverview = asyncHandler(async (req, res) => {
 // @route   GET /api/google/insights/performance
 // @access  Private (Protected by Gromentum JWT)
 const getPerformance = asyncHandler(async (req, res) => {
-  const { siteUrl, startDate, endDate, dimension, dimensions, rowLimit, limit } = req.query;
+  const { siteUrl, startDate, endDate, rangePreset, range, dimension, dimensions, rowLimit, limit } = req.query;
 
   const result = await googleInsightService.getPerformance(req.user._id, {
     siteUrl,
     startDate,
     endDate,
+    rangePreset: rangePreset || range,
     dimension,
     dimensions,
     rowLimit: rowLimit || limit,
@@ -66,12 +68,13 @@ const getPerformance = asyncHandler(async (req, res) => {
 // @route   GET /api/google/insights/queries
 // @access  Private (Protected by Gromentum JWT)
 const getQueries = asyncHandler(async (req, res) => {
-  const { siteUrl, startDate, endDate, rowLimit, limit } = req.query;
+  const { siteUrl, startDate, endDate, rangePreset, range, rowLimit, limit } = req.query;
 
   const result = await googleInsightService.getDimensionBreakdown(req.user._id, 'query', {
     siteUrl,
     startDate,
     endDate,
+    rangePreset: rangePreset || range,
     rowLimit: rowLimit || limit,
   });
 
@@ -86,12 +89,13 @@ const getQueries = asyncHandler(async (req, res) => {
 // @route   GET /api/google/insights/pages
 // @access  Private (Protected by Gromentum JWT)
 const getPages = asyncHandler(async (req, res) => {
-  const { siteUrl, startDate, endDate, rowLimit, limit } = req.query;
+  const { siteUrl, startDate, endDate, rangePreset, range, rowLimit, limit } = req.query;
 
   const result = await googleInsightService.getDimensionBreakdown(req.user._id, 'page', {
     siteUrl,
     startDate,
     endDate,
+    rangePreset: rangePreset || range,
     rowLimit: rowLimit || limit,
   });
 
@@ -106,12 +110,13 @@ const getPages = asyncHandler(async (req, res) => {
 // @route   GET /api/google/insights/countries
 // @access  Private (Protected by Gromentum JWT)
 const getCountries = asyncHandler(async (req, res) => {
-  const { siteUrl, startDate, endDate, rowLimit, limit } = req.query;
+  const { siteUrl, startDate, endDate, rangePreset, range, rowLimit, limit } = req.query;
 
   const result = await googleInsightService.getDimensionBreakdown(req.user._id, 'country', {
     siteUrl,
     startDate,
     endDate,
+    rangePreset: rangePreset || range,
     rowLimit: rowLimit || limit,
   });
 
@@ -126,13 +131,50 @@ const getCountries = asyncHandler(async (req, res) => {
 // @route   GET /api/google/insights/devices
 // @access  Private (Protected by Gromentum JWT)
 const getDevices = asyncHandler(async (req, res) => {
-  const { siteUrl, startDate, endDate, rowLimit, limit } = req.query;
+  const { siteUrl, startDate, endDate, rangePreset, range, rowLimit, limit } = req.query;
 
   const result = await googleInsightService.getDimensionBreakdown(req.user._id, 'device', {
     siteUrl,
     startDate,
     endDate,
+    rangePreset: rangePreset || range,
     rowLimit: rowLimit || limit,
+  });
+
+  res.json({
+    success: true,
+    data: result.data,
+    meta: result.meta,
+  });
+});
+
+// @desc    Search Analytics Performance comparison endpoint (current vs comparison period, daily or hourly)
+// @route   GET /api/google/insights/performance/compare
+// @access  Private (Protected by Gromentum JWT)
+const getPerformanceCompare = asyncHandler(async (req, res) => {
+  const {
+    siteUrl,
+    startDate,
+    endDate,
+    rangePreset,
+    range,
+    comparisonType,
+    comparisonStartDate,
+    comparisonEndDate,
+    granularity,
+    timezone,
+  } = req.query;
+
+  const result = await googleInsightService.getPerformanceCompare(req.user._id, {
+    siteUrl,
+    startDate,
+    endDate,
+    rangePreset: rangePreset || range,
+    comparisonType,
+    comparisonStartDate,
+    comparisonEndDate,
+    granularity,
+    timezone,
   });
 
   res.json({
@@ -150,4 +192,6 @@ module.exports = {
   getPages,
   getCountries,
   getDevices,
+  getPerformanceCompare,
 };
+

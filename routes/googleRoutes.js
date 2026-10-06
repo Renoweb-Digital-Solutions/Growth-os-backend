@@ -36,6 +36,10 @@ router.get('/properties', protect, googleInsightController.getProperties);
 // @desc    Executive overview of Search Console metrics (Clicks, Impressions, CTR, Position, Trends, Comparison)
 router.get('/insights/overview', protect, googleInsightController.getOverview);
 
+// @route   GET /api/google/insights/performance/compare
+// @desc    Performance comparison breakdown (current period vs previous_period, year_over_year, or custom range)
+router.get('/insights/performance/compare', protect, googleInsightController.getPerformanceCompare);
+
 // @route   GET /api/google/insights/performance
 // @desc    Flexible dimension performance breakdown (queries, pages, countries, devices)
 router.get('/insights/performance', protect, googleInsightController.getPerformance);

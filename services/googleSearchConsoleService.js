@@ -26,7 +26,7 @@ const getAuthorizationUrl = (state) => {
     client_id: process.env.GOOGLE_CLIENT_ID,
     redirect_uri: process.env.GOOGLE_REDIRECT_URI,
     response_type: 'code',
-    scope: 'https://www.googleapis.com/auth/webmasters.readonly openid profile email',
+    scope: 'https://www.googleapis.com/auth/webmasters.readonly https://www.googleapis.com/auth/analytics.readonly openid profile email',
     access_type: 'offline', // Mandatory to obtain refresh_token
     prompt: 'consent', // Ensures refresh_token is returned on re-consent
     state: state,
@@ -312,6 +312,10 @@ const querySearchAnalytics = async (accessToken, siteUrl, queryParams = {}) => {
     requestBody.aggregationType = queryParams.aggregationType;
   }
 
+  if (queryParams.dataState) {
+    requestBody.dataState = queryParams.dataState;
+  }
+
   const data = await fetchGoogleApi(url, accessToken, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -331,6 +335,7 @@ const querySearchAnalytics = async (accessToken, siteUrl, queryParams = {}) => {
   return {
     rows: normalizedRows,
     responseAggregationType: data.responseAggregationType || null,
+    metadata: data.metadata || null,
   };
 };
 
