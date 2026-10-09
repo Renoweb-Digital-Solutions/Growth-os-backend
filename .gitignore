@@ -131,3 +131,8 @@ dist
 
 
 docs/
+
+# Temporary Phase 1 & Phase 2 GA4 Validation Scripts
+tests/phase1*.js
+tests/phase2*.js
+
