@@ -801,7 +801,8 @@ const validateAndNormalizeDateRange = (startDateInput, endDateInput, rangePreset
 };
 
 /**
- * Calculates comparison date range based on comparisonType (previous_period, year_over_year, custom)
+ * Calculates comparison date range based on comparisonType (previous_period, year_over_year, custom).
+ * Aligns preceding period date comparison semantics with GA4 (day-of-week matching for multi-day ranges).
  */
 const calculateComparisonDateRange = (startDateStr, endDateStr, comparisonType, customStart, customEnd) => {
   const startComp = parseDateStr(startDateStr);
@@ -828,18 +829,34 @@ const calculateComparisonDateRange = (startDateStr, endDateStr, comparisonType, 
     };
   }
 
-  // Default: previous_period (exact preceding duration window)
+  // Default: previous_period (day-of-week matched preceding period, aligned with GA4 date comparison semantics)
   const startUtc = new Date(Date.UTC(startComp.year, startComp.month - 1, startComp.day));
   const endUtc = new Date(Date.UTC(endComp.year, endComp.month - 1, endComp.day));
   const days = Math.round((endUtc.getTime() - startUtc.getTime()) / (24 * 60 * 60 * 1000)) + 1;
 
-  const prevEndComp = addDays(startComp.year, startComp.month, startComp.day, -1);
-  const prevStartComp = addDays(prevEndComp.year, prevEndComp.month, prevEndComp.day, -(days - 1));
+  if (days <= 2) {
+    const prevEndComp = addDays(startComp.year, startComp.month, startComp.day, -1);
+    const prevStartComp = addDays(prevEndComp.year, prevEndComp.month, prevEndComp.day, -(days - 1));
+    return {
+      compStartDateStr: formatDateString(prevStartComp.year, prevStartComp.month, prevStartComp.day),
+      compEndDateStr: formatDateString(prevEndComp.year, prevEndComp.month, prevEndComp.day),
+    };
+  }
 
-  return {
+  const shiftWeeks = Math.max(1, Math.round(days / 7));
+  const shiftDays = shiftWeeks * 7;
+
+  const prevStartComp = addDays(startComp.year, startComp.month, startComp.day, -shiftDays);
+  const prevEndComp = addDays(endComp.year, endComp.month, endComp.day, -shiftDays);
+
+  const res = {
     compStartDateStr: formatDateString(prevStartComp.year, prevStartComp.month, prevStartComp.day),
     compEndDateStr: formatDateString(prevEndComp.year, prevEndComp.month, prevEndComp.day),
   };
+
+  console.log(`[GA4 COMPARISON DATE RESOLVER] Range: ${startDateStr} -> ${endDateStr} (${days} days) | Previous: ${res.compStartDateStr} -> ${res.compEndDateStr} (shifted ${shiftDays} days / ${shiftWeeks} weeks)`);
+
+  return res;
 };
 
 /**
@@ -1661,8 +1678,8 @@ const getOverview = async (userId, queryParams = {}) => {
       comparison: {
         type: comparisonType,
         enabled: isComparisonEnabled,
-        startDate: isComparisonEnabled && previousReportRange ? previousReportRange.startDate : (isComparisonEnabled ? compStartDateStr : null),
-        endDate: isComparisonEnabled && previousReportRange ? previousReportRange.endDate : (isComparisonEnabled ? compEndDateStr : null),
+        startDate: isComparisonEnabled ? compStartDateStr : null,
+        endDate: isComparisonEnabled ? compEndDateStr : null,
       },
       capabilities,
       quota: batchResults[0]?.quota || firstVisitsResult?.quota || null,
@@ -1845,25 +1862,6 @@ const getTrafficAcquisition = async (userId, queryParams = {}) => {
     }
   }
 
-  const totalPromise = runGA4Report({
-    accessToken,
-    propertyId: property.propertyId,
-    dateRanges: [{ startDate: startDateStr, endDate: endDateStr, name: 'current_period' }],
-    metrics: allAcquisitionMetrics,
-    limit: 1,
-  });
-
-  let totalCompPromise = null;
-  if (isComparisonEnabled) {
-    totalCompPromise = runGA4Report({
-      accessToken,
-      propertyId: property.propertyId,
-      dateRanges: [{ startDate: compStartDateStr, endDate: compEndDateStr, name: 'previous_period' }],
-      metrics: allAcquisitionMetrics,
-      limit: 1,
-    });
-  }
-
   let compResult = null;
   let comparisonMap = new Map();
   if (isComparisonEnabled) {
@@ -1887,20 +1885,22 @@ const getTrafficAcquisition = async (userId, queryParams = {}) => {
     }
   }
 
-  const [totalResult, totalCompResult] = await Promise.all([totalPromise, totalCompPromise]);
-
   const primaryMetricIdx = allAcquisitionMetrics.indexOf(primaryMetricConfig.name);
 
   let currentTotalVal = 0;
-  if (totalResult && Array.isArray(totalResult.rows) && totalResult.rows.length > 0) {
-    const rawVal = totalResult.rows[0].metricValues[primaryMetricIdx];
+  if (currentResult && Array.isArray(currentResult.totals) && currentResult.totals.length > primaryMetricIdx) {
+    const rawVal = currentResult.totals[primaryMetricIdx];
     currentTotalVal = typeof rawVal === 'number' && !isNaN(rawVal) ? rawVal : Number(rawVal) || 0;
+  } else if (currentResult && Array.isArray(currentResult.rows)) {
+    currentTotalVal = currentResult.rows.reduce((acc, r) => acc + (Number(r.metricValues[primaryMetricIdx]) || 0), 0);
   }
 
   let previousTotalVal = 0;
-  if (isComparisonEnabled && totalCompResult && Array.isArray(totalCompResult.rows) && totalCompResult.rows.length > 0) {
-    const rawVal = totalCompResult.rows[0].metricValues[primaryMetricIdx];
+  if (isComparisonEnabled && compResult && Array.isArray(compResult.totals) && compResult.totals.length > primaryMetricIdx) {
+    const rawVal = compResult.totals[primaryMetricIdx];
     previousTotalVal = typeof rawVal === 'number' && !isNaN(rawVal) ? rawVal : Number(rawVal) || 0;
+  } else if (isComparisonEnabled && compResult && Array.isArray(compResult.rows)) {
+    previousTotalVal = compResult.rows.reduce((acc, r) => acc + (Number(r.metricValues[primaryMetricIdx]) || 0), 0);
   }
 
   const totalComparison = isComparisonEnabled
@@ -2179,6 +2179,26 @@ const SUGGESTED_CARDS_REGISTRY = {
     metricLabel: 'New users',
     metricType: 'INTEGER',
     defaultPreset: '28D',
+  },
+  'sessions-by-channel': {
+    key: 'sessions-by-channel',
+    aliases: [
+      'sessions_by_channel',
+      'sessionsByChannel',
+      'sessions-by-session-primary-channel-group',
+      'sessions_by_session_primary_channel_group',
+      'sessionsBySessionPrimaryChannelGroup',
+      'sessions-channel',
+      'sessions-primary-channel-group',
+    ],
+    title: 'Sessions by Session primary channel group',
+    gaDimension: 'sessionPrimaryChannelGroup',
+    dimensionLabel: 'Session primary channel group',
+    gaMetric: 'sessions',
+    metricLabel: 'Sessions',
+    metricType: 'INTEGER',
+    defaultPreset: '28D',
+    limit: 8,
   },
   'key-events-by-platform': {
     key: 'key-events-by-platform',
@@ -2939,17 +2959,196 @@ const fetchNewUsersCardData = async (userId, cardConfig, queryParams = {}, optio
 };
 
 /**
+ * Dedicated reporter for "Active users by Town/City" Suggested Card with pre-selection filtering of (not set).
+ */
+const fetchCityCardData = async (userId, cardConfig, queryParams = {}, options = {}) => {
+  const property = options.property || (await resolveSelectedProperty(userId, queryParams.propertyId));
+  const accessToken = options.accessToken || (await googleService.getValidAccessToken(userId));
+
+  const rawPresetInput =
+    queryParams.preset ||
+    queryParams.datePreset ||
+    queryParams.rangePreset ||
+    queryParams.range ||
+    (cardConfig ? cardConfig.defaultPreset : '28D');
+
+  const { preset, startDateStr, endDateStr } = validateAndNormalizeDateRange(
+    queryParams.startDate,
+    queryParams.endDate,
+    rawPresetInput,
+    property.timeZone
+  );
+
+  const comparisonType = (queryParams.comparisonType || 'previous_period').toLowerCase().trim();
+  const isComparisonEnabled = comparisonType !== 'none';
+  const { compStartDateStr, compEndDateStr } = calculateComparisonDateRange(
+    startDateStr,
+    endDateStr,
+    comparisonType,
+    queryParams.comparisonStartDate,
+    queryParams.comparisonEndDate
+  );
+
+  const limit = queryParams.limit ? Math.min(Math.max(parseInt(queryParams.limit, 10), 1), 50) : (cardConfig ? (cardConfig.limit || 8) : 8);
+
+  const currentReportPromise = runGA4Report({
+    accessToken,
+    propertyId: property.propertyId,
+    dateRanges: [{ startDate: startDateStr, endDate: endDateStr, name: 'current_period' }],
+    dimensions: [{ name: 'city' }],
+    metrics: [{ name: 'activeUsers' }],
+    orderBys: [
+      {
+        metric: { metricName: 'activeUsers' },
+        desc: true,
+      },
+    ],
+    limit: 1000,
+    keepEmptyRows: false,
+  }).catch((err) => {
+    if (err.statusCode === 400 || err.code === 'INCOMPATIBLE_METRIC_DIMENSION') {
+      return { rows: [] };
+    }
+    throw err;
+  });
+
+  const compReportPromise = isComparisonEnabled
+    ? runGA4Report({
+        accessToken,
+        propertyId: property.propertyId,
+        dateRanges: [{ startDate: compStartDateStr, endDate: compEndDateStr, name: 'previous_period' }],
+        dimensions: [{ name: 'city' }],
+        metrics: [{ name: 'activeUsers' }],
+        limit: 1000,
+        keepEmptyRows: false,
+      }).catch(() => ({ rows: [] }))
+    : Promise.resolve({ rows: [] });
+
+  const [reportResult, compResult] = await Promise.all([
+    currentReportPromise,
+    compReportPromise,
+  ]);
+
+  const comparisonMap = new Map();
+  if (isComparisonEnabled && compResult && Array.isArray(compResult.rows)) {
+    compResult.rows.forEach((row) => {
+      const dimVal = row.dimensionValues && row.dimensionValues.length > 0 ? String(row.dimensionValues[0]).trim() : '';
+      const rawVal = row.metricValues && row.metricValues.length > 0 ? row.metricValues[0] : 0;
+      const numVal = typeof rawVal === 'number' && !isNaN(rawVal) ? rawVal : Number(rawVal) || 0;
+      if (dimVal && dimVal.toLowerCase() !== '(not set)') {
+        comparisonMap.set(dimVal, numVal);
+      }
+    });
+  }
+
+  const totalCurrent = (reportResult && Array.isArray(reportResult.totals) && reportResult.totals.length > 0)
+    ? Number(reportResult.totals[0]) || 0
+    : ((reportResult && Array.isArray(reportResult.rows))
+        ? reportResult.rows.reduce((acc, r) => acc + (Number(r.metricValues[0]) || 0), 0)
+        : 0);
+
+  const totalPrevious = (compResult && Array.isArray(compResult.totals) && compResult.totals.length > 0)
+    ? Number(compResult.totals[0]) || 0
+    : ((compResult && Array.isArray(compResult.rows))
+        ? compResult.rows.reduce((acc, r) => acc + (Number(r.metricValues[0]) || 0), 0)
+        : 0);
+
+  const totalComp = isComparisonEnabled
+    ? calculateMetricComparison(totalCurrent, totalPrevious, 'INTEGER')
+    : null;
+
+  const isInvalidCity = (c) => !c || String(c).trim() === '' || String(c).trim().toLowerCase() === '(not set)';
+
+  const rawRows = (reportResult && Array.isArray(reportResult.rows)) ? reportResult.rows : [];
+
+  // Filter out (not set), null, undefined, empty, and whitespace-only city values BEFORE taking top N
+  const validRows = rawRows.filter((row) => {
+    const dimVal = row.dimensionValues && row.dimensionValues.length > 0 ? String(row.dimensionValues[0]).trim() : '';
+    return !isInvalidCity(dimVal);
+  });
+
+  // Take top N valid city rows AFTER filtering
+  const topValidRows = validRows.slice(0, limit);
+
+  const rows = topValidRows.map((row) => {
+    const dimVal = String(row.dimensionValues[0]).trim();
+    const rawVal = row.metricValues && row.metricValues.length > 0 ? row.metricValues[0] : 0;
+    const currentVal = typeof rawVal === 'number' && !isNaN(rawVal) ? rawVal : Number(rawVal) || 0;
+    const previousVal = comparisonMap.get(dimVal) || 0;
+
+    const comp = calculateMetricComparison(currentVal, previousVal, 'INTEGER');
+
+    return {
+      dimensionValue: dimVal,
+      dimensionLabel: dimVal,
+      dimension: dimVal,
+      value: currentVal,
+      current: currentVal,
+      previous: previousVal,
+      changePct: comp.changePct,
+      changeDiff: comp.changeDiff,
+      comparisonStatus: comp.comparisonStatus,
+    };
+  });
+
+  console.log(`[GA4 CITY CARD LOG] Property: ${property.propertyId} | Date: ${startDateStr}->${endDateStr} | Total: ${totalCurrent} | Raw rows: ${rawRows.length} | Valid city rows: ${validRows.length} | Final returned rows: ${rows.length}`);
+  console.log(`[GA4 CITY CARD DIAGNOSTIC] First 5 returned rows:`, JSON.stringify(rows.slice(0, 5)));
+
+  return {
+    card: cardConfig ? cardConfig.key : 'active-users-by-city',
+    title: cardConfig ? cardConfig.title : 'Active users by Town/City',
+    dimension: 'city',
+    dimensionLabel: 'Town/City',
+    gaDimension: 'city',
+    metric: 'activeUsers',
+    metricLabel: 'Active users',
+    gaMetric: 'activeUsers',
+    dateRange: {
+      preset,
+      startDate: startDateStr,
+      endDate: endDateStr,
+    },
+    comparison: {
+      type: comparisonType,
+      enabled: isComparisonEnabled,
+      startDate: isComparisonEnabled ? compStartDateStr : null,
+      endDate: isComparisonEnabled ? compEndDateStr : null,
+    },
+    total: totalCurrent,
+    totalComparison: isComparisonEnabled ? {
+      current: totalCurrent,
+      previous: totalPrevious,
+      changePct: totalComp.changePct,
+      changeDiff: totalComp.changeDiff,
+      comparisonStatus: totalComp.comparisonStatus,
+    } : null,
+    rows,
+  };
+};
+
+/**
  * Executes GA4 report query for a single card with its own independent date range and property timezone.
  */
 const fetchSingleSuggestedCardData = async (userId, cardConfig, queryParams = {}, options = {}) => {
   if (cardConfig && cardConfig.key === 'active-users-by-country') {
     return fetchCountryCardData(userId, cardConfig, queryParams, options);
   }
+  if (cardConfig && cardConfig.key === 'active-users-by-city') {
+    return fetchCityCardData(userId, cardConfig, queryParams, options);
+  }
   if (cardConfig && cardConfig.key === 'key-events-by-platform') {
     return fetchPlatformCardData(userId, cardConfig, queryParams, options);
   }
   if (cardConfig && cardConfig.key === 'new-users-by-channel') {
     return fetchNewUsersCardData(userId, cardConfig, queryParams, options);
+  }
+  if (cardConfig && cardConfig.key === 'sessions-by-channel') {
+    const acqRes = await getTrafficAcquisition(userId, queryParams);
+    return {
+      card: cardConfig.key,
+      title: cardConfig.title,
+      ...acqRes.data,
+    };
   }
 
   const property = options.property || (await resolveSelectedProperty(userId, queryParams.propertyId));
@@ -3074,8 +3273,10 @@ const fetchSingleSuggestedCardData = async (userId, cardConfig, queryParams = {}
     title: cardConfig.title,
     dimension: cardConfig.gaDimension,
     dimensionLabel: cardConfig.dimensionLabel,
+    gaDimension: cardConfig.gaDimension,
     metric: cardConfig.gaMetric,
     metricLabel: cardConfig.metricLabel,
+    gaMetric: cardConfig.gaMetric,
     dateRange: {
       preset,
       startDate: startDateStr,
@@ -3177,6 +3378,10 @@ const getSuggestedCards = async (userId, queryParams = {}) => {
   };
 };
 
+const ga4RealtimeReportCache = new Map();
+const ga4RealtimeInFlightPromises = new Map();
+const GA4_REALTIME_CACHE_TTL_MS = 10000;
+
 /**
  * Generic reusable runRealtimeReport foundation calling GA4 Data API v1beta
  */
@@ -3189,53 +3394,90 @@ const runGA4RealtimeReport = async ({
   metricFilter = null,
   orderBys = [],
   limit = 1000,
+  skipCache = false,
 }) => {
   const cleanPropertyId = String(propertyId).replace('properties/', '').trim();
-  const url = `${DATA_API_BASE_URL}/properties/${cleanPropertyId}:runRealtimeReport`;
+  const cacheKey = `runRealtimeReport:${cleanPropertyId}:${JSON.stringify({
+    dimensions,
+    metrics,
+    dimensionFilter,
+    metricFilter,
+    orderBys,
+    limit,
+  })}`;
 
-  const requestBody = {
-    dimensions: dimensions.map((d) => (typeof d === 'string' ? { name: d } : d)),
-    metrics: metrics.map((m) => (typeof m === 'string' ? { name: m } : m)),
-    ...(dimensionFilter ? { dimensionFilter } : {}),
-    ...(metricFilter ? { metricFilter } : {}),
-    ...(Array.isArray(orderBys) && orderBys.length > 0 ? { orderBys } : {}),
-    limit: limit ? Math.min(parseInt(limit, 10), 10000) : 1000,
-  };
+  const now = Date.now();
 
-  const responseData = await fetchGA4DataApi(url, accessToken, {
-    method: 'POST',
-    body: JSON.stringify(requestBody),
-  });
+  // 1. Return cached response if within 10s TTL
+  if (!skipCache && ga4RealtimeReportCache.has(cacheKey)) {
+    const cached = ga4RealtimeReportCache.get(cacheKey);
+    if (now - cached.timestamp < GA4_REALTIME_CACHE_TTL_MS) {
+      return cached.data;
+    }
+    ga4RealtimeReportCache.delete(cacheKey);
+  }
 
-  const rawRows = Array.isArray(responseData.rows) ? responseData.rows : [];
-  const dimensionHeaders = Array.isArray(responseData.dimensionHeaders)
-    ? responseData.dimensionHeaders.map((h) => h.name)
-    : [];
-  const metricHeaders = Array.isArray(responseData.metricHeaders)
-    ? responseData.metricHeaders.map((h) => ({ name: h.name, type: h.type }))
-    : [];
+  // 2. Return in-flight promise if duplicate realtime request is executing
+  if (!skipCache && ga4RealtimeInFlightPromises.has(cacheKey)) {
+    return ga4RealtimeInFlightPromises.get(cacheKey);
+  }
 
-  const normalizedRows = rawRows.map((row) => {
-    const dimValues = (row.dimensionValues || []).map((v) => v.value);
-    const metValues = (row.metricValues || []).map((v) => {
-      const valStr = v.value;
-      const num = Number(valStr);
-      return isNaN(num) ? valStr : num;
+  // 3. Create fresh execution promise throttled by concurrency queue
+  const executeRealtimePromise = enqueueGA4Request(async () => {
+    const url = `${DATA_API_BASE_URL}/properties/${cleanPropertyId}:runRealtimeReport`;
+
+    const requestBody = {
+      dimensions: dimensions.map((d) => (typeof d === 'string' ? { name: d } : d)),
+      metrics: metrics.map((m) => (typeof m === 'string' ? { name: m } : m)),
+      ...(dimensionFilter ? { dimensionFilter } : {}),
+      ...(metricFilter ? { metricFilter } : {}),
+      ...(Array.isArray(orderBys) && orderBys.length > 0 ? { orderBys } : {}),
+      limit: limit ? Math.min(parseInt(limit, 10), 10000) : 1000,
+    };
+
+    const responseData = await fetchGA4DataApi(url, accessToken, {
+      method: 'POST',
+      body: JSON.stringify(requestBody),
     });
 
-    return {
-      dimensionValues: dimValues,
-      metricValues: metValues,
+    const rawRows = Array.isArray(responseData.rows) ? responseData.rows : [];
+    const dimensionHeaders = Array.isArray(responseData.dimensionHeaders)
+      ? responseData.dimensionHeaders.map((h) => h.name)
+      : [];
+    const metricHeaders = Array.isArray(responseData.metricHeaders)
+      ? responseData.metricHeaders.map((h) => ({ name: h.name, type: h.type }))
+      : [];
+
+    const normalizedRows = rawRows.map((row) => {
+      const dimValues = (row.dimensionValues || []).map((v) => v.value);
+      const metValues = (row.metricValues || []).map((v) => {
+        const valStr = v.value;
+        const num = Number(valStr);
+        return isNaN(num) ? valStr : num;
+      });
+
+      return {
+        dimensionValues: dimValues,
+        metricValues: metValues,
+      };
+    });
+
+    const result = {
+      rows: normalizedRows,
+      dimensionHeaders,
+      metricHeaders,
+      rowCount: responseData.rowCount || normalizedRows.length,
+      totals: responseData.totals || null,
     };
+
+    ga4RealtimeReportCache.set(cacheKey, { data: result, timestamp: Date.now() });
+    return result;
+  }).finally(() => {
+    ga4RealtimeInFlightPromises.delete(cacheKey);
   });
 
-  return {
-    rows: normalizedRows,
-    dimensionHeaders,
-    metricHeaders,
-    rowCount: responseData.rowCount || normalizedRows.length,
-    totals: responseData.totals || null,
-  };
+  ga4RealtimeInFlightPromises.set(cacheKey, executeRealtimePromise);
+  return executeRealtimePromise;
 };
 
 /**
@@ -3362,6 +3604,9 @@ const resolveRealtimeMetricConfig = (metricInput) => {
     return REALTIME_METRICS_REGISTRY.activeusers;
   }
   const cleanKey = metricInput.trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+  if (cleanKey === 'chooseforme' || cleanKey === 'default' || cleanKey === 'choose') {
+    return REALTIME_METRICS_REGISTRY.activeusers;
+  }
   for (const [key, config] of Object.entries(REALTIME_METRICS_REGISTRY)) {
     if (key === cleanKey) return config;
   }
@@ -3379,6 +3624,9 @@ const resolveRealtimeDimensionConfig = (dimensionInput) => {
     return REALTIME_DIMENSIONS_REGISTRY.country;
   }
   const cleanKey = dimensionInput.trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+  if (cleanKey === 'chooseforme' || cleanKey === 'default' || cleanKey === 'choose') {
+    return REALTIME_DIMENSIONS_REGISTRY.country;
+  }
   for (const [key, config] of Object.entries(REALTIME_DIMENSIONS_REGISTRY)) {
     if (key === cleanKey) return config;
   }
@@ -3589,6 +3837,7 @@ module.exports = {
   resolveCountryMetricConfig,
   resolveCountryDimensionConfig,
   fetchCountryCardData,
+  fetchCityCardData,
   resolveAcquisitionMetricConfig,
   resolveAcquisitionDimensionConfig,
   resolvePlatformMetricConfig,
