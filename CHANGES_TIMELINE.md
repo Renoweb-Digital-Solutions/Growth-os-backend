@@ -1,5 +1,56 @@
 # Backend Changes Timeline
 
+## [2026-10-11] Phase 1 — Growmentum LinkedIn Integration Audit Fixes (Fixes 1–5)
+- **Overview**: Addressed all findings from the read-only LinkedIn Phase 1 audit:
+  1. **Fix 1 (Granted Scopes Handling)**:
+     - In OAuth callback, never fall back to configured scopes when LinkedIn omits the `scope` property from the token response.
+     - Parses space-delimited `scope` field strictly according to OAuth 2.0 / LinkedIn specifications.
+     - Safely falls back to verified OpenID claims (`['openid', 'profile', 'email']`) upon successful `/v2/userinfo` profile resolution only, never promoting missing scopes to Advertising API or Community Management permissions.
+     - Asset discovery requires explicit verified permissions (`r_ads`/`r_ads_reporting` for ads; `r_organization_social`/`r_organization_admin` for community) and approved product state.
+  2. **Fix 2 (Company Page ACL Filtering & Organization Enrichment)**:
+     - Filtered organization ACL entries returned from `/rest/organizationalEntityAcls?q=roleAssignee` strictly for approved status (`item.state === 'APPROVED'`) and organization targets (`item.organizationalTarget.startsWith('urn:li:organization:')`).
+     - Enriched discovered organizations using LinkedIn REST endpoint `GET /rest/organizations/{id}` with `LinkedIn-Version` header and `X-Restli-Protocol-Version: 2.0.0`.
+     - Populated actual display name (`localizedName`), vanity name (`vanityName`), and logo (`logoV2`).
+     - Handled partial lookups, 403 Forbidden responses, and errors gracefully without fabricating company names or exposing unauthorized assets.
+  3. **Fix 3 (OAuth Redirect URI Binding)**:
+     - Persisted the exact `redirectUri` used to initiate OAuth inside the single-use `LinkedInOAuthState` record.
+     - During callback, strictly validates the stored `redirectUri` and passes it to code-to-token exchange (`exchangeCodeForToken`).
+     - Rejects callbacks with missing or mismatched redirect URIs before attempting code exchange.
+  4. **Fix 4 (API Versioning & Scope Governance)**:
+     - Verified official LinkedIn versioning convention: Added `getLinkedInApiVersion()` supporting configurable `process.env.LINKEDIN_API_VERSION` defaulting to `'202510'` with `YYYYMM` format.
+     - Updated REST API calls to include `LinkedIn-Version` and `X-Restli-Protocol-Version: 2.0.0` headers.
+     - Scopes remain isolated between apps: Community scopes (`r_organization_social`, `r_organization_admin`) and Advertising scopes (`r_ads`, `r_ads_reporting`) are dynamically driven by env and verified per integration.
+  5. **Fix 5 (Security, Sanitization & Test Coverage)**:
+     - Reviewed token storage: documented existing MongoDB string storage pattern shared across Meta, Google, and LinkedIn without silent breaking changes.
+     - Zero token leakage: confirmed tokens and secrets are omitted from all client-facing responses and logs.
+     - Expanded test suite to 20 comprehensive unit, integration, and route-level tests (`tests/linkedinIntegrationPhase1.test.js`) verifying scopes, ACL filtering, organization enrichment, redirect URI binding, and Express router middleware.
+     - Verified 0 regressions against existing Meta (`tests/metaRegressionAndIntegrityTest.js` - 12/12 passing) and GA4 (`tests/ga4AllLowerCardsContractTest.js` - passing) test suites.
+
+## [2026-10-11] Phase 1 — Growmentum LinkedIn Integration Implementation (Two Developer Apps)
+- **Overview**: Implemented read-only backend foundation for LinkedIn OAuth 2.0 integration across TWO separate developer applications:
+  1. `Growmentum`: OpenID Connect (`openid profile email`) and Advertising API (`r_ads r_ads_reporting` — approval pending).
+  2. `Growmentum-community`: Community Management API (`openid profile email r_organization_social r_organization_admin` — company verification pending).
+- **Data Flow & Routing**:
+  - `GET /api/linkedin/config` (Protected): Returns configuration status for both apps (client ID masked, redirect URIs, scopes, approval flags) without leaking secrets.
+  - `GET /api/linkedin/status` (Protected): Returns high-level connection and approval status across both apps for the authenticated Growmentum user.
+  - `GET /api/linkedin/callback` (Public Universal): Atomically resolves `appType` via single-use state token and dispatches to appropriate app.
+  - `GET /api/linkedin/:app/connect` (Protected): Generates cryptographically secure, expiring OAuth state in `LinkedInOAuthState` (10-min TTL), constructs 3-legged authorization URL with documented scopes, and returns or redirects.
+  - `GET /api/linkedin/:app/callback` (Public): Validates state single-use & app isolation, exchanges authorization code for tokens, retrieves OpenID member profile (`/v2/userinfo`), and upserts `LinkedInIntegration`.
+  - `GET /api/linkedin/:app/status` (Protected): Returns sanitized app connection status, member identity, granted scopes, and active selected asset.
+  - `DELETE /api/linkedin/:app/disconnect` (Protected): Performs soft disconnect (zeroes access/refresh tokens and unselects assets while preserving audit record).
+  - `GET /api/linkedin/:app/assets` (Protected): Discovers authorized assets (Ad Accounts or Company Pages) or gracefully returns `apiAccessAvailable: false` with pending approval reasons without fabricating analytics data.
+  - `POST /api/linkedin/:app/selected-asset` (Protected): Validates user asset ownership and atomically updates active selected asset.
+  - `GET /api/linkedin/:app/selected-asset` (Protected): Retrieves active selected asset for the user.
+- **Database Schema Updates**:
+  - `models/LinkedInOAuthState.js`: Stores `{ state, userId, appType, expiresAt, createdAt }` with 600s TTL index for atomic CSRF/replay prevention.
+  - `models/LinkedInIntegration.js`: Stores `{ userId, appType, linkedinMemberId, linkedinMemberName, linkedinMemberEmail, linkedinMemberPicture, accessToken, refreshToken, tokenExpiresAt, refreshTokenExpiresAt, grantedScopes, status, approvalStatus, selectedAssetId }` with compound unique index `{ userId: 1, appType: 1 }` and `toSafeObject()` leak prevention.
+  - `models/LinkedInAsset.js`: Stores user-scoped authorized assets with compound unique index `{ userId: 1, appType: 1, assetId: 1 }`.
+- **Reasoning & Security**:
+  - Strict isolation: Each app operates independently with dedicated environment variables, scopes, and database records. Disconnecting one app does not affect the other.
+  - Token protection: Access tokens, refresh tokens, and client secrets are never returned in API responses.
+  - Read-only analytics safety: Strictly read-only; does not implement publishing, content manipulation, or campaign creation.
+
+
 ## [2026-10-05] Google Analytics 4 Performance Trend Granularity Rule Update (30-Day Threshold)
 - **Overview**: Updated trend granularity selection rule in `resolveTrendGranularity()` to strictly enforce daily granularity for effective date ranges $\le 30$ calendar days and weekly granularity for non-year effective date ranges $> 30$ calendar days.
 - **Data Flow**:
