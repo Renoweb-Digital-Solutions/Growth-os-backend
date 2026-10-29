@@ -11,16 +11,25 @@ const metaInsightService = require('../services/metaInsightService');
  * Helper to validate since / until date range parameters
  */
 const validateDateRange = (since, until) => {
-  if (since && until) {
-    const startDate = new Date(since);
-    const endDate = new Date(until);
-
-    if (isNaN(startDate.getTime()) || isNaN(endDate.getTime())) {
+  if (since) {
+    const s = new Date(since);
+    if (isNaN(s.getTime())) {
       const err = new Error('Invalid date parameters: since and until must be valid date strings (YYYY-MM-DD)');
       err.statusCode = 400;
       throw err;
     }
-
+  }
+  if (until) {
+    const u = new Date(until);
+    if (isNaN(u.getTime())) {
+      const err = new Error('Invalid date parameters: since and until must be valid date strings (YYYY-MM-DD)');
+      err.statusCode = 400;
+      throw err;
+    }
+  }
+  if (since && until) {
+    const startDate = new Date(since);
+    const endDate = new Date(until);
     if (startDate > endDate) {
       const err = new Error('Invalid date range: since parameter must be earlier than or equal to until parameter');
       err.statusCode = 400;
@@ -64,6 +73,27 @@ const getSocialInsights = asyncHandler(async (req, res) => {
     pageId,
     instagramAccountId: instagramAccountId || instagramId,
     instagramId,
+    datePreset,
+    since,
+    until,
+  });
+
+  res.json({
+    success: true,
+    data: result.data,
+    meta: result.meta,
+  });
+});
+
+// @desc    Facebook Business Suite-inspired analytics dashboard
+// @route   GET /api/meta/insights/facebook
+// @access  Private (Protected by Gromentum JWT)
+const getFacebookAnalytics = asyncHandler(async (req, res) => {
+  const { pageId, datePreset, since, until } = req.query;
+  validateDateRange(since, until);
+
+  const result = await metaInsightService.getFacebookAnalytics(req.user._id, {
+    pageId,
     datePreset,
     since,
     until,
@@ -209,6 +239,7 @@ const getAdInsights = asyncHandler(async (req, res) => {
 module.exports = {
   getOverview,
   getSocialInsights,
+  getFacebookAnalytics,
   getContentInsights,
   getSingleContentInsights,
   getAdsInsights,

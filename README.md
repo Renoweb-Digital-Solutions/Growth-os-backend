@@ -21,18 +21,23 @@ graph TD
     Routes -->|/api/auth| AuthCtrl[authController]
     Routes -->|/api/onboarding| OnboardCtrl[onboardingController]
     Routes -->|/api/meta| MetaCtrl[metaController]
+    Routes -->|/api/google| GoogleCtrl[googleController]
+    Routes -->|/api/linkedin| LinkedInCtrl[linkedinController]
     
     AuthCtrl -->|Uses| UserMod[User Model]
     OnboardCtrl -->|Uses| TenantMod[Tenant Models]
     MetaCtrl -->|Uses| MetaMod[Meta Integration & OAuth State Models]
+    LinkedInCtrl -->|Uses| LinkedInMod[LinkedIn Integration, State & Asset Models]
     
     UserMod -.-> DB[(MongoDB)]
     TenantMod -.-> DB
     MetaMod -.-> DB
+    LinkedInMod -.-> DB
     
     AuthCtrl -.-> ErrorMid[errorMiddleware]
     OnboardCtrl -.-> ErrorMid
     MetaCtrl -.-> ErrorMid
+    LinkedInCtrl -.-> ErrorMid
 ```
 
 ## API Routes & Endpoints
@@ -40,6 +45,19 @@ graph TD
 - `/api/auth`: Registration, Login, and Password Reset flow.
 - `/api/onboarding`: Tenant setup and onboarding workflow.
 - `/api/users`: User management endpoints.
+- `/api/linkedin`: LinkedIn Integration Endpoints (Phase 1):
+  - **Global & Configuration**:
+    - `GET /api/linkedin/config`: Protected endpoint returning public configuration status of both LinkedIn apps without leaking secrets.
+    - `GET /api/linkedin/status`: Protected endpoint returning high-level connection and approval status across both apps for the authenticated user.
+    - `GET /api/linkedin/callback`: Public universal callback resolving the appropriate app via single-use OAuth state.
+  - **Per-App Lifecycle & Assets (`:app` = `ads` | `community`)**:
+    - `GET /api/linkedin/:app/connect`: Protected endpoint initiating LinkedIn 3-legged OAuth flow with cryptographically secure, expiring state.
+    - `GET /api/linkedin/:app/callback`: Public callback endpoint handling authorization code exchange and OpenID profile resolution.
+    - `GET /api/linkedin/:app/status`: Protected endpoint returning detailed app connection status, profile, and selected asset.
+    - `DELETE /api/linkedin/:app/disconnect`: Protected endpoint performing soft disconnect (zeroes tokens and preserves audit state).
+    - `GET /api/linkedin/:app/assets`: Protected endpoint discovering authorized assets (or gracefully reporting pending product approval).
+    - `POST /api/linkedin/:app/selected-asset`: Protected endpoint setting the user's active selected asset.
+    - `GET /api/linkedin/:app/selected-asset`: Protected endpoint retrieving the user's active selected asset.
 - `/api/meta`: Meta Integration Endpoints (Phase 1 & Phase 2):
   - **Phase 1 — Connection & Authorization**:
     - `GET /api/meta/connect`: Protected endpoint to initiate Meta Login for Business OAuth.

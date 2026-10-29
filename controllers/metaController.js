@@ -39,45 +39,118 @@ const connect = asyncHandler(async (req, res) => {
   res.redirect(authUrl);
 });
 
+/**
+ * Safely sanitizes an error message string to remove credentials/tokens before URL construction.
+ */
+const sanitizeOAuthErrorMessage = (msg) => {
+  if (!msg || typeof msg !== 'string') return 'An error occurred during Meta authorization';
+  return msg
+    .replace(/(?:bearer|access_token|token|secret|client_secret|api_key)=?[^\s&"']+/gi, '[REDACTED]')
+    .replace(/EA[A-Za-z0-9]{20,}/g, '[REDACTED_TOKEN]')
+    .trim();
+};
+
+/**
+ * Resolves the destination URL for post-OAuth browser redirects.
+ * Prioritizes META_SUCCESS_REDIRECT_URL if explicitly set.
+ * Otherwise defaults to FRONTEND_URL with '/dashboard/settings?tab=integrations'
+ * so the user returns directly to the Integrations tab with feedback banners.
+ */
+const getPostOAuthRedirectUrl = (params = {}) => {
+  let target = process.env.META_SUCCESS_REDIRECT_URL;
+
+  if (!target) {
+    const frontendBase = process.env.FRONTEND_URL || 'http://localhost:3000';
+    const cleanBase = frontendBase.replace(/\/+$/, '');
+    target = `${cleanBase}/dashboard/settings?tab=integrations`;
+  }
+
+  try {
+    const url = new URL(target);
+    Object.entries(params).forEach(([key, val]) => {
+      if (val !== undefined && val !== null && val !== '') {
+        url.searchParams.set(key, val);
+      }
+    });
+    return url.toString();
+  } catch {
+    const search = new URLSearchParams(params).toString();
+    const joinChar = target.includes('?') ? '&' : '?';
+    return search ? `${target}${joinChar}${search}` : target;
+  }
+};
+
 // @desc    Handle Meta OAuth callback
 // @route   GET /api/meta/callback
 // @access  Public (Meta Browser Redirect)
 const callback = asyncHandler(async (req, res) => {
   const { code, state, error, error_description } = req.query;
 
-  // Clean up state if Meta returned an authorization error
+  // Detect whether request comes from browser navigation vs API client
+  const isBrowserNav = !req.xhr && (req.headers.accept?.includes('text/html') || !req.headers.accept);
+
+  // Clean up state if Meta returned an authorization error or user cancelled
   if (error) {
     if (state) {
       await MetaOAuthState.findOneAndDelete({ state });
     }
+    const cleanMsg = sanitizeOAuthErrorMessage(error_description || error);
+    if (isBrowserNav) {
+      return res.redirect(getPostOAuthRedirectUrl({ meta_status: 'error', error: cleanMsg }));
+    }
     res.status(400);
-    throw new Error(`Meta authorization failed: ${error_description || error}`);
+    throw new Error(`Meta authorization failed: ${cleanMsg}`);
   }
 
   if (!code || !state) {
     if (state) {
       await MetaOAuthState.findOneAndDelete({ state });
     }
+    const errorMsg = 'Missing code or state parameter in Meta callback';
+    if (isBrowserNav) {
+      return res.redirect(getPostOAuthRedirectUrl({ meta_status: 'error', error: errorMsg }));
+    }
     res.status(400);
-    throw new Error('Missing code or state parameter in Meta callback');
+    throw new Error(errorMsg);
   }
 
   // Atomic single-use state consumption to prevent replay attacks
   const stateRecord = await MetaOAuthState.findOneAndDelete({ state });
 
   if (!stateRecord) {
+    const errorMsg = 'Invalid or already consumed OAuth state token';
+    if (isBrowserNav) {
+      return res.redirect(getPostOAuthRedirectUrl({ meta_status: 'error', error: errorMsg }));
+    }
     res.status(400);
-    throw new Error('Invalid or already consumed OAuth state token');
+    throw new Error(errorMsg);
   }
 
   if (stateRecord.expiresAt < new Date()) {
+    const errorMsg = 'OAuth state token has expired. Please initiate connection again';
+    if (isBrowserNav) {
+      return res.redirect(getPostOAuthRedirectUrl({ meta_status: 'error', error: errorMsg }));
+    }
     res.status(400);
-    throw new Error('OAuth state token has expired. Please initiate connection again');
+    throw new Error(errorMsg);
   }
 
-  const tokenData = await metaService.exchangeCodeForToken(code);
-  const metaUser = await metaService.getMetaUserProfile(tokenData.accessToken);
-  const grantedScopes = await metaService.getGrantedPermissions(tokenData.accessToken);
+  let tokenData;
+  let metaUser;
+  let grantedScopes;
+
+  try {
+    tokenData = await metaService.exchangeCodeForToken(code);
+    metaUser = await metaService.getMetaUserProfile(tokenData.accessToken);
+    grantedScopes = await metaService.getGrantedPermissions(tokenData.accessToken);
+  } catch (exchangeErr) {
+    const cleanMsg = sanitizeOAuthErrorMessage(exchangeErr.message || 'Meta token exchange failed');
+    if (isBrowserNav) {
+      return res.redirect(getPostOAuthRedirectUrl({ meta_status: 'error', error: cleanMsg }));
+    }
+    res.status(exchangeErr.statusCode || 400);
+    throw new Error(cleanMsg);
+  }
 
   let tokenExpiresAt = null;
   if (tokenData.expiresIn) {
@@ -98,9 +171,8 @@ const callback = asyncHandler(async (req, res) => {
 
   metaInsightService.invalidateUserCache(stateRecord.userId);
 
-  const redirectUrl = process.env.FRONTEND_URL || process.env.META_SUCCESS_REDIRECT_URL;
-  if (redirectUrl) {
-    return res.redirect(`${redirectUrl}?meta_status=success`);
+  if (isBrowserNav) {
+    return res.redirect(getPostOAuthRedirectUrl({ meta_status: 'success' }));
   }
 
   res.status(200).json({
@@ -118,6 +190,7 @@ const getStatus = asyncHandler(async (req, res) => {
 
   if (!integration || integration.status === 'disconnected') {
     return res.json({
+      success: true,
       connected: false,
       status: 'disconnected',
     });
@@ -133,6 +206,7 @@ const getStatus = asyncHandler(async (req, res) => {
   }
 
   res.json({
+    success: true,
     connected: currentStatus === 'connected',
     status: currentStatus,
     metaUserId: integration.metaUserId,
@@ -171,4 +245,6 @@ module.exports = {
   callback,
   getStatus,
   disconnect,
+  getPostOAuthRedirectUrl,
+  sanitizeOAuthErrorMessage,
 };
