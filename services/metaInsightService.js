@@ -658,12 +658,29 @@ const fetchWithDateBoundary = async (fetchFn, id, accessToken, queryParams, user
  * Local fallback extractors in case metaService extractors are undefined or mocked
  */
 const localExtractShareCount = (post) => {
-  if (!post) return null;
-  if (post.shares && typeof post.shares.count === 'number') {
-    return post.shares.count;
+  if (!post || typeof post !== 'object') return null;
+  if (typeof post.shareCount === 'number' && Number.isFinite(post.shareCount) && post.shareCount >= 0) {
+    return post.shareCount;
   }
-  if (typeof post.share_count === 'number') {
+  if (post.shares && typeof post.shares === 'object' && !Array.isArray(post.shares)) {
+    if (typeof post.shares.count === 'number' && Number.isFinite(post.shares.count) && post.shares.count >= 0) {
+      return post.shares.count;
+    }
+    if (typeof post.shares.count === 'string' && post.shares.count.trim() !== '') {
+      const parsed = Number(post.shares.count);
+      if (Number.isFinite(parsed) && parsed >= 0) {
+        return parsed;
+      }
+    }
+  }
+  if (typeof post.share_count === 'number' && Number.isFinite(post.share_count) && post.share_count >= 0) {
     return post.share_count;
+  }
+  if (typeof post.share_count === 'string' && post.share_count.trim() !== '') {
+    const parsed = Number(post.share_count);
+    if (Number.isFinite(parsed) && parsed >= 0) {
+      return parsed;
+    }
   }
   return null;
 };
@@ -1464,10 +1481,10 @@ function buildFacebookAnalyticsReport({
   const content = {
     summary: {
       totalPosts: posts.length,
-      totalReactions: hasPostWithInteractions ? totalReactions : null,
-      totalComments: hasPostWithInteractions ? totalComments : null,
-      totalShares: hasPostWithInteractions ? totalShares : null,
-      totalInteractions: hasPostWithInteractions ? totalInteractions : null,
+      totalReactions: hasNumericReaction ? totalReactions : null,
+      totalComments: hasNumericComment ? totalComments : null,
+      totalShares: hasNumericShare ? totalShares : null,
+      totalInteractions: hasNumericPostInteractions ? totalInteractions : null,
     },
     posts,
   };
@@ -1972,19 +1989,42 @@ const getSingleContentInsights = async (userId, contentId, queryParams = {}) => 
     const formattedContent = {
       platform: 'facebook',
       contentId: rawItem.postId,
+      id: rawItem.postId,
       message: rawItem.message,
       createdTime: rawItem.createdTime,
       permalinkUrl: rawItem.permalinkUrl,
+      permalink: rawItem.permalinkUrl,
       fullPicture: rawItem.fullPicture,
       reactionCount: metrics.reactionCount,
       commentCount: metrics.commentCount,
       shareCount: metrics.shareCount,
       uniqueMediaViewers: metrics.uniqueMediaViewers,
+      postMediaViews: metrics.postMediaViews,
       reactionBreakdown: metrics.reactionBreakdown,
       views: metrics.views,
+      viewsPeriod: 'lifetime',
       reach: metrics.reach,
+      reachPeriod: 'lifetime',
       engagement: metrics.engagement,
       insightsError: rawItem.insightsError || null,
+      reactions: {
+        total: metrics.reactionCount,
+        status: metrics.reactionCount !== null ? 'AVAILABLE' : (rawItem.insightsError ? 'ERROR' : 'UNAVAILABLE'),
+      },
+      comments: {
+        total: metrics.commentCount,
+        status: metrics.commentCount !== null ? 'AVAILABLE' : 'UNAVAILABLE',
+      },
+      shares: {
+        total: metrics.shareCount,
+        status: metrics.shareCount !== null ? 'AVAILABLE' : 'UNAVAILABLE',
+      },
+      viewsDetails: {
+        total: metrics.views,
+        period: 'lifetime',
+        status: metrics.views !== null ? 'AVAILABLE' : (rawItem.insightsError ? 'ERROR' : 'UNAVAILABLE'),
+        metricName: metrics.postMediaViews !== null ? 'post_media_view' : (metrics.uniqueMediaViewers !== null ? 'post_total_media_view_unique' : null),
+      },
       metrics,
     };
 

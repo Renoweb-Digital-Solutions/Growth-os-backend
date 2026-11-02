@@ -461,15 +461,29 @@ const deriveReactionsFromInsights = (insightsData) => {
  * Helper to extract shareCount conservatively (preserving genuine zero vs null when omitted)
  */
 const extractShareCount = (post) => {
-  if (!post) return null;
-  if (typeof post.shareCount === 'number' && Number.isFinite(post.shareCount)) {
+  if (!post || typeof post !== 'object') return null;
+  if (typeof post.shareCount === 'number' && Number.isFinite(post.shareCount) && post.shareCount >= 0) {
     return post.shareCount;
   }
-  if (post.shares && typeof post.shares.count === 'number' && Number.isFinite(post.shares.count)) {
-    return post.shares.count;
+  if (post.shares && typeof post.shares === 'object' && !Array.isArray(post.shares)) {
+    if (typeof post.shares.count === 'number' && Number.isFinite(post.shares.count) && post.shares.count >= 0) {
+      return post.shares.count;
+    }
+    if (typeof post.shares.count === 'string' && post.shares.count.trim() !== '') {
+      const parsed = Number(post.shares.count);
+      if (Number.isFinite(parsed) && parsed >= 0) {
+        return parsed;
+      }
+    }
   }
-  if (typeof post.share_count === 'number' && Number.isFinite(post.share_count)) {
+  if (typeof post.share_count === 'number' && Number.isFinite(post.share_count) && post.share_count >= 0) {
     return post.share_count;
+  }
+  if (typeof post.share_count === 'string' && post.share_count.trim() !== '') {
+    const parsed = Number(post.share_count);
+    if (Number.isFinite(parsed) && parsed >= 0) {
+      return parsed;
+    }
   }
   return null;
 };
@@ -567,10 +581,12 @@ const getFacebookPagePosts = async (pageId, accessToken, paginationParams = {}, 
 
         normalizedPosts.push({
           postId: post.id,
+          id: post.id,
           message: post.message || '',
           createdTime: post.created_time,
           fullPicture: post.full_picture || null,
           permalinkUrl: post.permalink_url || null,
+          permalink: post.permalink_url || null,
           shareCount,
           reactionCount,
           commentCount,

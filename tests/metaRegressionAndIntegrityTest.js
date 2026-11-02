@@ -3488,6 +3488,105 @@ async function runMetaRegressionTestSuite() {
     assert(!capturedPageTarget.includes('/108002008285074/'), 'Must not leak target_page_999 to other pages');
   });
 
+
+  // --------------------------------------------------------------------------
+  // TEST 64: Reliable Facebook post-wise Shares retrieval, conservative nulls & malformed handling
+  // --------------------------------------------------------------------------
+  test('extractShareCount & parseFacebookPostMetrics: handles shares.count=5, shares.count=0, missing, malformed, and keeps other metrics intact', () => {
+    // 64a: shares.count = 5 -> shareCount = 5
+    const postWithShares = {
+      id: 'post_shares_5',
+      shares: { count: 5 },
+      reactions: { summary: { total_count: 12 } },
+      comments: { summary: { total_count: 3 } },
+    };
+    const parsedShares5 = metaInsightService.parseFacebookPostMetrics(postWithShares);
+    assert.strictEqual(parsedShares5.shareCount, 5, 'shares.count = 5 must yield shareCount = 5');
+    assert.strictEqual(parsedShares5.shares.total, 5);
+    assert.strictEqual(parsedShares5.shares.status, 'AVAILABLE');
+    assert.strictEqual(parsedShares5.fbPostInteractions, 20, '12 reactions + 3 comments + 5 shares = 20 interactions');
+
+    // 64b: shares.count = 0 -> shareCount = 0 (genuine explicit zero)
+    const postWithShares0 = {
+      id: 'post_shares_0',
+      shares: { count: 0 },
+      reactions: { summary: { total_count: 8 } },
+      comments: { summary: { total_count: 1 } },
+    };
+    const parsedShares0 = metaInsightService.parseFacebookPostMetrics(postWithShares0);
+    assert.strictEqual(parsedShares0.shareCount, 0, 'shares.count = 0 must preserve explicit zero');
+    assert.strictEqual(parsedShares0.shares.total, 0);
+    assert.strictEqual(parsedShares0.shares.status, 'AVAILABLE');
+    assert.strictEqual(parsedShares0.fbPostInteractions, 9, '8 reactions + 1 comment + 0 shares = 9 interactions');
+
+    // 64c: shares missing -> shareCount = null
+    const postMissingShares = {
+      id: 'post_missing_shares',
+      message: 'Post without shares node',
+      reactions: { summary: { total_count: 10 } },
+      comments: { summary: { total_count: 2 } },
+    };
+    const parsedMissing = metaInsightService.parseFacebookPostMetrics(postMissingShares);
+    assert.strictEqual(parsedMissing.shareCount, null, 'Missing shares field must return null');
+    assert.strictEqual(parsedMissing.shares.total, null);
+    assert.strictEqual(parsedMissing.shares.status, 'UNAVAILABLE');
+    assert.strictEqual(parsedMissing.fbPostInteractions, null, 'Must not infer or fabricate interactions when shares is missing');
+
+    // 64d: shares malformed -> shareCount = null
+    const malformedCases = [
+      { id: 'm1', shares: { count: 'invalid' } },
+      { id: 'm2', shares: { count: null } },
+      { id: 'm3', shares: { count: NaN } },
+      { id: 'm4', shares: { count: -5 } },
+      { id: 'm5', shares: {} },
+      { id: 'm6', shares: [] },
+      { id: 'm7', shares: 'shared' },
+      { id: 'm8', shares: true },
+    ];
+    for (const mc of malformedCases) {
+      assert.strictEqual(
+        metaInsightService.extractShareCount(mc),
+        null,
+        `Malformed shares ${JSON.stringify(mc.shares)} must yield null`
+      );
+      assert.strictEqual(
+        metaService.extractShareCount(mc),
+        null,
+        `metaService: Malformed shares ${JSON.stringify(mc.shares)} must yield null`
+      );
+    }
+
+    // 64e: shares unavailable while other post metrics remain intact
+    const livePostShape = {
+      id: '108002008285074_1122234583890132',
+      created_time: '2026-10-26T12:57:37+0000',
+      message: 'Moovana post',
+      reactions: { summary: { total_count: 3 } },
+      comments: { summary: { total_count: 0 } },
+      // shares is omitted
+      insightsData: [
+        { name: 'post_media_view', period: 'lifetime', values: [{ value: 248 }] },
+        { name: 'post_reactions_by_type_total', period: 'lifetime', values: [{ value: { like: 3 } }] },
+        { name: 'post_total_media_view_unique', period: 'lifetime', values: [{ value: 222 }] },
+      ],
+    };
+    const parsedLive = metaInsightService.parseFacebookPostMetrics(livePostShape);
+    assert.strictEqual(parsedLive.reactionCount, 3);
+    assert.strictEqual(parsedLive.commentCount, 0);
+    assert.strictEqual(parsedLive.shareCount, null);
+    assert.strictEqual(parsedLive.views, 248);
+    assert.strictEqual(parsedLive.reach, 222);
+    assert.strictEqual(parsedLive.fbPostInteractions, null);
+    assert.strictEqual(parsedLive.reactions.total, 3);
+    assert.strictEqual(parsedLive.reactions.status, 'AVAILABLE');
+    assert.strictEqual(parsedLive.comments.total, 0);
+    assert.strictEqual(parsedLive.comments.status, 'AVAILABLE');
+    assert.strictEqual(parsedLive.shares.total, null);
+    assert.strictEqual(parsedLive.shares.status, 'UNAVAILABLE');
+    assert.strictEqual(parsedLive.viewsDetails.total, 248);
+    assert.strictEqual(parsedLive.viewsDetails.status, 'AVAILABLE');
+  });
+
   // Restore fetch
   global.fetch = originalFetch;
 
