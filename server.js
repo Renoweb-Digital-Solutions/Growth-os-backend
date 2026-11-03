@@ -15,6 +15,8 @@ const userRoutes = require('./routes/userRoutes');
 const metaRoutes = require('./routes/metaRoutes');
 const googleRoutes = require('./routes/googleRoutes');
 const googleAnalyticsRoutes = require('./routes/googleAnalyticsRoutes');
+const linkedinRoutes = require('./routes/linkedinRoutes');
+const xRoutes = require('./routes/xRoutes');
 
 
 
@@ -67,6 +69,8 @@ app.use('/api/meta', (req, res, next) => {
 
 app.use('/api/google/analytics', googleAnalyticsRoutes);
 app.use('/api/google', googleRoutes);
+app.use('/api/linkedin', linkedinRoutes);
+app.use('/api/x', xRoutes);
 
 
 // Health check

@@ -93,6 +93,10 @@ router.get('/insights/overview', protect, metaInsightController.getOverview);
 // @desc    Unified Social insights for Facebook Pages and Instagram Accounts
 router.get('/insights/social', protect, metaInsightController.getSocialInsights);
 
+// @route   GET /api/meta/insights/facebook
+// @desc    Comprehensive Facebook Business Suite-inspired analytics dashboard
+router.get('/insights/facebook', protect, metaInsightController.getFacebookAnalytics);
+
 // @route   GET /api/meta/insights/content
 // @desc    Consolidated post & media content insights list
 router.get('/insights/content', protect, metaInsightController.getContentInsights);

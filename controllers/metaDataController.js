@@ -66,7 +66,10 @@ const getAssets = asyncHandler(async (req, res) => {
 
   const safePages = result.pages.map((p) => {
     const { pageToken, ...safePage } = p;
-    return safePage;
+    return {
+      id: safePage.pageId,
+      ...safePage,
+    };
   });
 
   res.json({
