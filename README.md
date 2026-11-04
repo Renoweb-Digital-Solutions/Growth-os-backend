@@ -2,6 +2,20 @@
 
 Central technical documentation for the GrowthOS Node.js / Express backend API.
 
+## Request Logging
+
+Routine Meta Graph API starts/successes and successful HTTP access logs are silent
+by default. Graph API failures, HTTP responses with status 400 or higher, and the
+global error handler remain visible.
+
+- Set `META_DEBUG_LOGS=true` to enable Meta route traces and Graph request traces.
+- Set `HTTP_REQUEST_LOGS=true` to log every incoming HTTP request with Morgan.
+
+Restart the backend after changing these environment variables. Leave these flags
+unset or `false` for normal operation. These flags control logging only; they do
+not change analytics requests, caching, or responses. Meta route traces omit query
+strings, and Graph traces omit access tokens.
+
 ## Architecture & Data Flow
 
 The backend employs a Model-Controller-Routes architecture with centralized error handling and middleware.

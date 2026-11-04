@@ -193,12 +193,16 @@ const fetchGraphApi = async (endpoint, accessToken, params = {}, userId = null, 
 
   const path = endpoint.startsWith('/') ? endpoint.slice(1) : endpoint;
   const url = `https://graph.facebook.com/${version}/${path}?${searchParams.toString()}`;
-  const safeUrl = `https://graph.facebook.com/${version}/${path}`;
-  
-  const reqId = Math.random().toString(36).substring(2, 9);
-  const ts = new Date().toISOString();
 
-  console.log(`[GRAPH] requestId=${reqId} purpose=meta_request endpoint=${path} timestamp=${ts} status=LAUNCHING metaCode=none`);
+  // # Reason: Analytics fans out into many Graph calls; routine traces must be opt-in.
+  // # How: Enable META_DEBUG_LOGS=true temporarily to correlate starts and successes.
+  // # Failures remain visible below, and URLs containing access tokens are never logged.
+  const debugLogging = process.env.META_DEBUG_LOGS === 'true';
+  const reqId = Math.random().toString(36).substring(2, 9);
+
+  if (debugLogging) {
+    console.debug(`[GRAPH] requestId=${reqId} purpose=meta_request endpoint=${path} timestamp=${new Date().toISOString()} status=LAUNCHING metaCode=none`);
+  }
 
   let response;
   try {
@@ -210,7 +214,7 @@ const fetchGraphApi = async (endpoint, accessToken, params = {}, userId = null, 
     const rawCauseMessage = fetchError.cause?.message || fetchError.cause?.code || fetchError.message || 'Unknown network error';
     const safeCauseMessage = String(rawCauseMessage).replace(/access_token=[^&]+/gi, 'access_token=[REDACTED]');
 
-    console.log(`[GRAPH] requestId=${reqId} purpose=meta_request endpoint=${path} timestamp=${new Date().toISOString()} status=NETWORK_ERROR metaCode=none`);
+    console.error(`[GRAPH] requestId=${reqId} purpose=meta_request endpoint=${path} timestamp=${new Date().toISOString()} status=NETWORK_ERROR metaCode=none`);
 
     const err = new Error(`Meta Graph API network failure: ${safeCauseMessage}`);
     err.statusCode = 502;
@@ -232,7 +236,7 @@ const fetchGraphApi = async (endpoint, accessToken, params = {}, userId = null, 
     const subcode = errorInfo.error_subcode;
     const message = errorInfo.message || 'Meta API request failed';
 
-    console.log(`[GRAPH] requestId=${reqId} purpose=meta_request endpoint=${path} timestamp=${new Date().toISOString()} status=${response.status} metaCode=${code}`);
+    console.warn(`[GRAPH] requestId=${reqId} purpose=meta_request endpoint=${path} timestamp=${new Date().toISOString()} status=${response.status} metaCode=${code}`);
 
     // Code 190: OAuth Access Token Expired or Revoked
     if (code === 190) {
@@ -290,7 +294,9 @@ const fetchGraphApi = async (endpoint, accessToken, params = {}, userId = null, 
     throw err;
   }
 
-  console.log(`[GRAPH] requestId=${reqId} purpose=meta_request endpoint=${path} timestamp=${new Date().toISOString()} status=${response.status} metaCode=none`);
+  if (debugLogging) {
+    console.debug(`[GRAPH] requestId=${reqId} purpose=meta_request endpoint=${path} timestamp=${new Date().toISOString()} status=${response.status} metaCode=none`);
+  }
   return data;
 };
 

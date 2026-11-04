@@ -35,8 +35,14 @@ app.use(helmet());
 app.use(cors());
 app.use(express.json());
 
-// In production, we log compactly. In dev, we use 'dev' format.
-app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
+// # Reason: Successful dashboard requests should not flood backend output.
+// # How: Keep HTTP failures visible; set HTTP_REQUEST_LOGS=true for all requests.
+app.use(
+  morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev', {
+    skip: (req, res) =>
+      process.env.HTTP_REQUEST_LOGS !== 'true' && res.statusCode < 400,
+  })
+);
 
 // Rate Limiting
 // Reason: Protects the API against brute-force attacks and flood DDoS while allowing rich dashboard interaction.
@@ -63,7 +69,10 @@ app.use('/api/users', userRoutes);
 app.use('/api/meta', (req, res, next) => {
   const reqId = Math.random().toString(36).substring(2, 9);
   req.metaReqId = reqId;
-  console.log(`[API] requestId=${reqId} route=${req.method} ${req.originalUrl} timestamp=${new Date().toISOString()}`);
+  // # Reason: Keep Meta request correlation available without logging every page load.
+  if (process.env.META_DEBUG_LOGS === 'true') {
+    console.debug(`[API] requestId=${reqId} route=${req.method} ${req.path} timestamp=${new Date().toISOString()}`);
+  }
   next();
 }, metaRoutes);
 

@@ -1,5 +1,17 @@
 # Backend Changes Timeline
 
+## [2026-11-04] Quiet analytics request logging by default
+
+- **Overview**: Removed unconditional Meta Graph launch/success output and duplicate
+  Meta route traces from normal operation. `META_DEBUG_LOGS=true` restores traces
+  when investigating an issue; Meta network/API failures remain visible.
+- **HTTP logging**: Morgan logs responses with status 400 or higher by default.
+  `HTTP_REQUEST_LOGS=true` restores access logging for every HTTP response.
+- **Data flow**: Routes -> controllers -> Meta services -> Graph API is unchanged.
+  Only console emission changes; analytics fetching, caching, and response data are
+  unchanged. Debug route traces omit query strings to avoid logging credentials.
+- **Database schema updates**: None.
+
 ## [2026-10-11] Phase 1 — Growmentum LinkedIn Integration Audit Fixes (Fixes 1–5)
 - **Overview**: Addressed all findings from the read-only LinkedIn Phase 1 audit:
   1. **Fix 1 (Granted Scopes Handling)**:
